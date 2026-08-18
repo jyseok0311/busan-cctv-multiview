@@ -1,0 +1,2243 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>부산 실시간 CCTV 멀티뷰</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  :root{
+    --bg:#14161a; --panel:#1c1f26; --line:#2c313b; --fg:#e8ebf0;
+    --dim:#9aa4b2; --accent:#4da3ff; --smart:#ffb454; --danger:#ff6b6b;
+    --rec:#ff4d4f; --motion:#5ee27a; --cols:3;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{
+    background:var(--bg); color:var(--fg);
+    font:14px/1.45 "Malgun Gothic","맑은 고딕",system-ui,sans-serif;
+    display:flex; overflow:hidden;
+  }
+
+  /* ---------- 사이드바 ---------- */
+  #side{
+    width:320px; flex:0 0 320px; background:var(--panel);
+    border-right:1px solid var(--line); display:flex; flex-direction:column;
+  }
+  #side.hidden{margin-left:-320px}
+  body.ready #side{transition:margin-left .18s ease}
+  @media (prefers-reduced-motion:reduce){ body.ready #side{transition:none} }
+  #side h1{font-size:15px;margin:0;padding:14px 14px 10px}
+  #side h1 small{display:block;font-weight:400;color:var(--dim);font-size:11px;margin-top:3px}
+
+  .tabs{display:flex;padding:0 14px;gap:5px}
+  .tabs button{
+    flex:1;background:#12141a;color:var(--dim);border:1px solid var(--line);
+    border-bottom:none;border-radius:6px 6px 0 0;padding:8px 4px;font:inherit;font-size:12px;cursor:pointer;
+  }
+  .tabs button.on{background:var(--panel);color:var(--fg);font-weight:700;box-shadow:inset 0 2px 0 var(--accent)}
+  .tabs button[data-tab="smart"].on{box-shadow:inset 0 2px 0 var(--smart)}
+  .tabs button[data-tab="live"].on{box-shadow:inset 0 2px 0 var(--danger)}
+  .tabs button .dot{
+    display:inline-block;min-width:16px;padding:0 4px;margin-left:3px;border-radius:8px;
+    background:var(--danger);color:#fff;font-size:10px;font-weight:700;
+  }
+
+  .filters{padding:10px 14px; display:flex; flex-direction:column; gap:6px; border-top:1px solid var(--line)}
+  .filters input,.filters select,.btn{
+    background:#12141a; color:var(--fg); border:1px solid var(--line);
+    border-radius:6px; padding:7px 9px; font:inherit; font-size:13px;
+  }
+  .btn{cursor:pointer}
+  .btn:hover{border-color:var(--accent)}
+  .btnrow{display:flex;gap:6px}
+  .btnrow .btn{flex:1;text-align:center}
+  #count{padding:0 14px 8px;color:var(--dim);font-size:12px}
+  #list{flex:1;overflow-y:auto;padding:0 8px 14px}
+
+  .cam{display:flex;align-items:flex-start;gap:8px;padding:7px 6px;border-radius:6px;cursor:pointer}
+  .cam:hover{background:#232833}
+  .cam.on{background:rgba(77,163,255,.15)}
+  .cam input{margin-top:3px;accent-color:var(--accent);flex:0 0 auto}
+  .cam b{display:block;font-weight:600;font-size:13px}
+  .cam span{display:block;color:var(--dim);font-size:11px;margin-top:1px}
+
+  .grp{display:flex;align-items:center;gap:8px;margin:10px 0 2px;padding:6px;border-bottom:1px solid var(--line)}
+  .grp b{font-size:13px;color:var(--smart)}
+  .grp em{font-style:normal;color:var(--dim);font-size:11px}
+  .grp .btn{margin-left:auto;padding:3px 8px;font-size:11px;flex:0 0 auto}
+  .grp .btn:hover{border-color:var(--smart)}
+  .cam.sub{margin-left:10px}
+  .cam.sub.on{background:rgba(255,180,84,.15)}
+  .cam.sub input{accent-color:var(--smart)}
+  .dir{
+    display:inline-block;min-width:18px;text-align:center;font-size:10px;font-weight:700;
+    background:#2c313b;color:var(--smart);border-radius:3px;padding:1px 4px;margin-right:5px;
+  }
+
+  /* 실시간 상황 목록 */
+  .evt{padding:9px 8px;border-radius:6px;cursor:pointer;border-bottom:1px solid var(--line)}
+  .evt:hover{background:#232833}
+  .evt .top{display:flex;align-items:center;gap:6px}
+  .evt .kind{
+    font-size:10px;font-weight:700;border-radius:3px;padding:1px 5px;flex:0 0 auto;
+    background:var(--danger);color:#fff;
+  }
+  .evt .kind.jam{background:#e8873a}
+  .evt .kind.flood{background:#3aa0e8}
+  .evt .kind.work{background:#7a7f8a}
+  .evt b{font-size:13px}
+  .evt time{margin-left:auto;color:var(--dim);font-size:11px;flex:0 0 auto}
+  .evt p{margin:3px 0 0;color:var(--dim);font-size:11px;line-height:1.4}
+  .evt .go{margin-top:4px;font-size:11px;color:var(--accent)}
+  .evt.none{color:var(--dim);cursor:default;border:0}
+  .evt.none:hover{background:none}
+
+  /* ---------- 본문 ---------- */
+  #main{flex:1;display:flex;flex-direction:column;min-width:0}
+  .bar{
+    display:flex;align-items:center;gap:9px;padding:7px 12px;
+    background:var(--panel);border-bottom:1px solid var(--line);flex:0 0 auto;flex-wrap:wrap;
+  }
+  .bar label{color:var(--dim);font-size:12px;display:flex;align-items:center;gap:4px}
+  .bar select,.bar input[type=range]{background:#12141a;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:4px 7px;font:inherit;font-size:12px}
+  .bar input[type=range]{padding:0;width:90px}
+  .bar .spacer{flex:1}
+  .bar .sep{width:1px;height:20px;background:var(--line)}
+  #bar2{font-size:12px}
+  #bar2 .btn{padding:5px 9px;font-size:12px}
+
+  #grid{
+    flex:1;display:grid;gap:6px;padding:6px;overflow:auto;
+    grid-template-columns:repeat(var(--cols),minmax(0,1fr));
+    align-content:start;
+  }
+  #grid.fit{align-content:stretch;overflow:hidden}
+  .tile{
+    position:relative;background:#000;border:1px solid var(--line);
+    border-radius:8px;overflow:hidden;aspect-ratio:4/3;min-height:0;
+  }
+  .tile.smart{border-color:rgba(255,180,84,.45)}
+  .tile.alert{border-color:var(--danger);box-shadow:0 0 0 1px var(--danger) inset}
+  #grid.fit .tile{aspect-ratio:auto;height:100%}
+  .tile video{width:100%;height:100%;object-fit:contain;display:block;background:#000}
+  .tile .cap{
+    position:absolute;left:0;right:0;top:0;padding:5px 8px;
+    background:linear-gradient(rgba(0,0,0,.78),transparent);
+    font-size:12px;font-weight:600;text-shadow:0 1px 2px #000;
+    display:flex;align-items:center;gap:6px;cursor:move;
+  }
+  /* 한 화면 크게 보기 (격자 안에서 확대 — 브라우저 전체화면이 아님) */
+  .tile.zoom{
+    position:fixed;z-index:60;aspect-ratio:auto;margin:0;
+    border-radius:10px;border-color:var(--accent);
+    box-shadow:0 18px 60px rgba(0,0,0,.65);
+  }
+  #grid.haszoom{overflow:hidden}
+  #zoomVeil{position:fixed;inset:0;z-index:55;background:rgba(8,10,13,.72);display:none;opacity:0;transition:opacity .28s}
+  #zoomVeil.on{display:block}
+  #zoomVeil.show{opacity:1}
+
+  /* 드래그로 자리 옮기기 */
+  .tile.dragging{opacity:.35}
+  .tile.dropzone{outline:2px dashed var(--accent);outline-offset:-2px}
+  .tile .grip{flex:0 0 auto;color:rgba(255,255,255,.5);font-size:12px;letter-spacing:-1px}
+  .tile .cap>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tile .tools{margin-left:auto;display:flex;gap:4px;opacity:0;transition:.15s}
+  .tile:hover .tools,.tile.rec .tools{opacity:1}
+  .tile .tools button{
+    background:rgba(0,0,0,.55);color:#fff;border:1px solid rgba(255,255,255,.25);
+    border-radius:4px;width:22px;height:22px;line-height:1;cursor:pointer;font-size:12px;padding:0;
+  }
+  .tile .tools button:hover{background:var(--accent);border-color:var(--accent)}
+  .tile .stat{
+    position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    color:var(--dim);font-size:12px;pointer-events:none;text-align:center;padding:10px;white-space:pre-line;
+  }
+  .tile.err .stat{color:var(--danger)}
+
+  /* 녹화 */
+  .tile.rec{outline:2px solid var(--rec);outline-offset:-2px}
+  .tile .tools button.on,.tile .tools button.on:hover{background:var(--rec);border-color:var(--rec)}
+  .rectag{
+    display:none;align-items:center;gap:4px;flex:0 0 auto;font-style:normal;
+    font-size:11px;font-weight:700;color:#fff;background:rgba(255,77,79,.92);
+    border-radius:3px;padding:1px 5px;font-variant-numeric:tabular-nums;
+  }
+  .tile.rec .rectag{display:inline-flex}
+  .rectag::before{content:'';width:6px;height:6px;border-radius:50%;background:#fff;animation:blink 1s infinite}
+  @keyframes blink{50%{opacity:.15}}
+  #recScreen.on{background:var(--rec);border-color:var(--rec);color:#fff;font-variant-numeric:tabular-nums}
+
+  /* 돌발 배지 */
+  .alerttag{
+    position:absolute;left:0;right:0;bottom:0;padding:4px 8px;font-style:normal;
+    background:linear-gradient(transparent,rgba(255,77,79,.85));
+    font-size:11px;font-weight:700;text-shadow:0 1px 2px #000;display:none;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  }
+  .tile.alert .alerttag{display:block}
+
+  /* 모션 감지 막대 */
+  .mbar{position:absolute;left:0;right:0;bottom:0;height:3px;background:rgba(255,255,255,.12);display:none}
+  body.motion .mbar{display:block}
+  body.motion .tile.alert .mbar{bottom:22px}
+  .mbar i{display:block;height:100%;width:0%;background:var(--motion);transition:width .2s}
+  .tile.moving{outline:2px solid var(--motion);outline-offset:-2px}
+  .tile.rec.moving{outline-color:var(--rec)}
+
+  #empty{margin:auto;color:var(--dim);text-align:center;line-height:2}
+
+  /* ---------- AI 검지 ---------- */
+  .det{position:absolute;inset:0;pointer-events:none;z-index:3}
+  .cnt{
+    display:none;align-items:center;gap:5px;flex:0 0 auto;font-style:normal;
+    font-size:11px;font-weight:700;color:#0b1220;background:#7fe08a;
+    border-radius:3px;padding:1px 6px;font-variant-numeric:tabular-nums;
+  }
+  body.ai .cnt{display:inline-flex}
+  .cnt.ped{background:#9ad4ff}
+  .cnt.flow{background:#ffd964;display:none}
+  body.ai .tile.lined .cnt.flow{display:inline-flex}
+  .tile.drawing .det{pointer-events:auto;cursor:crosshair}
+  .tile.drawing{outline:2px solid #ffd964;outline-offset:-2px}
+  .drawhint{
+    position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:4;
+    background:rgba(0,0,0,.82);color:#ffd964;font-size:12px;font-weight:700;
+    padding:8px 12px;border-radius:6px;display:none;pointer-events:none;text-align:center;line-height:1.6;
+  }
+  .tile.drawing .drawhint{display:block}
+  .tile .tools button.lineon{background:#ffd964;border-color:#ffd964;color:#111}
+
+  /* ---------- 통계 / 지도 오버레이 ---------- */
+  .modal{position:fixed;inset:0;background:rgba(10,12,15,.93);z-index:900;display:none;flex-direction:column}
+  .modal.on{display:flex}
+  .modalBar{display:flex;align-items:center;gap:9px;padding:9px 12px;background:var(--panel);border-bottom:1px solid var(--line)}
+  .modalBar b{font-size:14px}
+  .modalBar .spacer{flex:1}
+  #statsBody{flex:1;overflow:auto;padding:14px 16px}
+  #statsBody h3{font-size:13px;margin:18px 0 8px;color:var(--dim);font-weight:700}
+  #statsBody h3:first-child{margin-top:0}
+  table.st{width:100%;border-collapse:collapse;font-size:12px}
+  table.st th,table.st td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left}
+  table.st th{color:var(--dim);font-weight:600}
+  table.st td.n{text-align:right;font-variant-numeric:tabular-nums}
+  table.st tr.hot td{color:#ffb454}
+  table.st tr.warn td{color:var(--danger)}
+  table.st tbody tr{cursor:pointer}
+  table.st tbody tr:hover{background:#232833}
+  .kpi{display:flex;gap:10px;flex-wrap:wrap}
+  .kpi div{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 14px;min-width:130px}
+  .kpi b{display:block;font-size:20px;font-variant-numeric:tabular-nums}
+  .kpi span{color:var(--dim);font-size:11px}
+  #chartWrap{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px}
+  #chart{width:100%;height:200px;display:block}
+
+  /* ---------- 지도 ---------- */
+  #mapWrap{position:fixed;inset:0;background:rgba(10,12,15,.9);z-index:900;display:none;flex-direction:column}
+  #mapWrap.on{display:flex}
+  #mapBar{display:flex;align-items:center;gap:9px;padding:9px 12px;background:var(--panel);border-bottom:1px solid var(--line)}
+  #mapBar b{font-size:14px}
+  #mapBar .spacer{flex:1}
+  #map{flex:1}
+  .leaflet-container{background:#0d0f13}
+  #mapLegend{color:var(--dim);font-size:11px}
+  #mapLegend i{display:inline-block;width:9px;height:9px;border-radius:50%;margin:0 3px 0 9px;vertical-align:middle}
+
+  /* ---------- 모바일 ---------- */
+  #sideVeil{position:fixed;inset:0;z-index:70;background:rgba(8,10,13,.6);display:none}
+  #sideVeil.on{display:block}
+  #toolsToggle{display:none}
+  .tblWrap{overflow-x:auto}
+
+  /* 터치 기기: 마우스오버가 없으니 버튼을 항상 보이게 */
+  @media (hover:none){
+    .tile .tools{opacity:1}
+    .tile .tools button{width:30px;height:30px;font-size:14px}
+  }
+
+  @media (max-width:820px){
+    /* 사이드바를 화면 위로 덮는 서랍으로 */
+    #side{
+      position:fixed;left:0;top:0;bottom:0;z-index:75;
+      width:min(86vw,340px);flex-basis:auto;margin-left:0;
+      box-shadow:6px 0 28px rgba(0,0,0,.55);
+      padding-bottom:env(safe-area-inset-bottom);
+      transform:translateX(0);
+    }
+    #side.hidden{margin-left:0;transform:translateX(-102%);box-shadow:none}
+    body.ready #side{transition:transform .2s ease}
+
+    /* 도구 막대는 기본으로 접고, ⚙ 로 편다 */
+    #toolsToggle{display:inline-block}
+    #bar2,#bar3{display:none}
+    body.tools #bar2,body.tools #bar3{display:flex}
+    .bar{gap:7px;padding:6px 8px;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch}
+    .bar::-webkit-scrollbar{height:0}
+    .bar>*{flex:0 0 auto}
+    .bar .spacer{display:none}
+    .bar .btn,.bar select{padding:7px 9px;font-size:13px}
+    #playing{display:none}
+
+    #grid{gap:4px;padding:4px}
+    .tile{aspect-ratio:16/10}
+    .tile .cap{padding:6px 8px;font-size:11px}
+
+    .modalBar{flex-wrap:wrap;gap:6px}
+    #mapLegend{width:100%;order:9;font-size:10px}
+    #statsBody{padding:12px 10px}
+    .kpi div{min-width:calc(50% - 5px);flex:1}
+    table.st th,table.st td{padding:5px 6px;font-size:11px;white-space:nowrap}
+  }
+  @media (max-width:420px){
+    #side h1{font-size:14px;padding:12px 12px 8px}
+    .tabs button{font-size:11px;padding:7px 2px}
+  }
+</style>
+</head>
+<body>
+
+<aside id="side">
+  <h1>부산 실시간 CCTV 멀티뷰
+    <small>출처: 부산광역시 교통정보서비스센터(its.busan.go.kr)</small>
+  </h1>
+
+  <div class="tabs">
+    <button data-tab="normal" class="on">일반</button>
+    <button data-tab="smart">스마트교차로</button>
+    <button data-tab="live">실시간 상황<span class="dot" id="liveDot" style="display:none">0</span></button>
+  </div>
+
+  <div class="filters" id="camFilters">
+    <input id="q" type="search" placeholder="장소·주소 검색 (예: 서면, 해운대)">
+    <select id="gu"><option value="">전체 구·군</option></select>
+    <div class="btnrow">
+      <button class="btn" id="selPage">보이는 항목 전체선택</button>
+      <button class="btn" id="clear">선택 해제</button>
+    </div>
+  </div>
+  <div id="count">불러오는 중…</div>
+  <div id="list"></div>
+</aside>
+
+<div id="main">
+  <div class="bar">
+    <button class="btn" id="toggleSide" title="목록 패널 숨기기 / 보기 (단축키: [ )">◀ 목록</button>
+    <button class="btn" id="toolsToggle" title="도구 막대 펴기/접기">⚙</button>
+    <label>열 수
+      <select id="cols">
+        <option value="1">1</option><option value="2">2</option>
+        <option value="3" selected>3</option><option value="4">4</option>
+        <option value="5">5</option><option value="6">6</option>
+      </select>
+    </label>
+    <label><input type="checkbox" id="fit"> 화면에 맞춤</label>
+    <div class="sep"></div>
+    <button class="btn" id="openMap">🗺 지도</button>
+    <button class="btn" id="nearMe" title="현재 위치에서 가까운 CCTV 4곳">📍 내 주변</button>
+    <div class="spacer"></div>
+    <span id="playing" style="color:var(--dim);font-size:12px"></span>
+    <button class="btn" id="recScreen" title="선택한 CCTV 전체를 분할화면 한 영상으로 녹화">⏺ 화면녹화</button>
+    <button class="btn" id="reloadAll">전체 새로고침</button>
+    <button class="btn" id="fsAll">전체화면</button>
+  </div>
+
+  <div class="bar" id="bar2">
+    <label title="사고·공사·정체 지점의 CCTV를 자동으로 띄웁니다">
+      <input type="checkbox" id="autoTrack"> 🚨 돌발 자동추적
+    </label>
+    <div class="sep"></div>
+    <label title="움직임을 감지해 타일에 표시합니다">
+      <input type="checkbox" id="motionOn"> 👁 모션감지
+    </label>
+    <label>감도 <input type="range" id="motionSens" min="1" max="100" value="50"></label>
+    <label title="움직임이 있을 때만 녹화하고, 멎으면 저장합니다">
+      <input type="checkbox" id="motionRec"> 감지 시 자동녹화
+    </label>
+    <div class="sep"></div>
+    <label title="목록의 필터 결과를 일정 간격으로 돌려봅니다">
+      <input type="checkbox" id="rotateOn"> 🔄 순회
+    </label>
+    <label><select id="rotateSec">
+      <option value="10">10초</option><option value="15" selected>15초</option>
+      <option value="30">30초</option><option value="60">60초</option>
+    </select></label>
+    <span id="rotateInfo" style="color:var(--dim)"></span>
+    <div class="sep"></div>
+    <label>프리셋 <select id="presetSel"><option value="">— 불러오기 —</option></select></label>
+    <button class="btn" id="presetSave">저장</button>
+    <button class="btn" id="presetDel">삭제</button>
+  </div>
+
+  <div class="bar" id="bar3">
+    <label title="브라우저 안에서 GPU로 차량·보행자를 셉니다 (개인 식별 없음)">
+      <input type="checkbox" id="aiOn"> 🤖 AI 검지
+    </label>
+    <label>정확도 <select id="aiModel">
+      <option value="lite_mobilenet_v2" selected>빠름</option>
+      <option value="mobilenet_v2">정확(무거움)</option>
+    </select></label>
+    <label>주기 <select id="aiGap">
+      <option value="0">최대</option><option value="500">0.5초</option>
+      <option value="1500" selected>1.5초</option><option value="3000">3초</option>
+    </select></label>
+    <span id="aiStat" style="color:var(--dim)"></span>
+    <div class="sep"></div>
+    <label>스캔 <select id="scanPool">
+      <option value="all">전체</option><option value="normal" selected>일반</option><option value="smart">스마트교차로</option>
+    </select></label>
+    <button class="btn" id="scanBtn" title="모든 지점을 자동 순회하며 교통량을 측정·기록합니다">🛰 전역 스캔</button>
+    <span id="scanStat" style="color:var(--dim)"></span>
+    <div class="spacer"></div>
+    <button class="btn" id="statsBtn">📊 관측 통계</button>
+  </div>
+
+  <div id="grid"><div id="empty">
+    왼쪽 목록에서 보고 싶은 CCTV를 <b>여러 개</b> 선택하세요. <b>🗺 지도</b> 에서 골라도 됩니다.<br>
+    <b>스마트교차로</b> 탭의 <b>＋N방향</b> 은 한 교차로의 모든 진입로를 한 번에 띄웁니다.<br>
+    <b>🚨 돌발 자동추적</b> 을 켜면 사고·공사·정체 지점의 CCTV가 저절로 올라옵니다.<br>
+    띄운 화면은 <b>끌어서</b> 자리를 옮기고, <b>더블클릭</b>(또는 ⛶)으로 크게 볼 수 있습니다. 작게는 Esc.<br>
+    <small>동시 재생 수가 많을수록 CPU·네트워크 사용량이 커집니다. 9~16개 이하를 권장합니다.</small>
+  </div></div>
+</div>
+
+<div id="sideVeil"></div>
+<div id="zoomVeil"></div>
+
+<div class="modal" id="statsWrap">
+  <div class="modalBar">
+    <b>📊 관측 통계</b>
+    <span style="color:var(--dim);font-size:12px" id="statsMeta"></span>
+    <div class="spacer"></div>
+    <button class="btn" id="csvBtn">⬇ CSV 내보내기</button>
+    <button class="btn" id="dbClear">기록 비우기</button>
+    <button class="btn" id="statsClose">닫기 ✕</button>
+  </div>
+  <div id="statsBody"></div>
+</div>
+
+<div id="mapWrap">
+  <div id="mapBar">
+    <b>지도에서 CCTV 고르기</b>
+    <span id="mapLegend">
+      <i style="background:#4da3ff"></i>일반
+      <i style="background:#ffb454"></i>스마트교차로
+      <i style="background:#ff4d4f"></i>돌발상황
+      <span style="margin-left:12px">관측 후 교통량:</span>
+      <i style="background:#7fe08a"></i>한산 <i style="background:#ffd964"></i>보통
+      <i style="background:#ff8c42"></i>많음 <i style="background:#ff4d4f"></i>혼잡
+    </span>
+    <div class="spacer"></div>
+    <span id="mapCount" style="color:var(--dim);font-size:12px"></span>
+    <button class="btn" id="mapNear">📍 내 주변 4곳</button>
+    <button class="btn" id="mapClose">닫기 ✕</button>
+  </div>
+  <div id="map"></div>
+</div>
+
+<script>
+const BASE   = 'https://its.busan.go.kr/api-n/v1/bsits/user';
+const LSKEY  = 'busan-cctv-multiview-v3';
+const PSKEY  = 'busan-cctv-presets-v1';
+
+let cams  = [];                // 전체 카메라 (일반 + 스마트)
+let byKey = new Map();
+let sints = [];                // 스마트교차로 (카메라 배열 포함)
+let tab   = 'normal';
+let selected = [];             // 화면에 띄운 key 순서
+const players = new Map();     // key -> 재생 상태
+const alerts  = new Map();     // key -> {text, kind}  (돌발 배지)
+
+const esc = s => String(s).replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+// rcptCn 등은 '&amp;lt;' 처럼 이중 인코딩되어 온다
+function decodeEnt(s){
+  const t = document.createElement('textarea');
+  t.innerHTML = String(s ?? '');
+  t.innerHTML = t.value;
+  return t.value;
+}
+const distM = (aLat,aLon,bLat,bLon) => Math.hypot((aLat-bLat)*111000, (aLon-bLon)*91000);
+
+/* ---------------- 저장/복원 ---------------- */
+function save(){
+  try{
+    localStorage.setItem(LSKEY, JSON.stringify({
+      selected: rotateOn ? rotateBackup : selected,
+      tab,
+      cols: document.getElementById('cols').value,
+      fit : document.getElementById('fit').checked,
+      side: document.getElementById('side').classList.contains('hidden'),
+      auto: document.getElementById('autoTrack').checked,
+      mOn : document.getElementById('motionOn').checked,
+      mSens: document.getElementById('motionSens').value,
+      mRec: document.getElementById('motionRec').checked,
+      rSec: document.getElementById('rotateSec').value,
+      aiGap: document.getElementById('aiGap').value,
+      aiModel: document.getElementById('aiModel').value,
+      scanPool: document.getElementById('scanPool').value
+    }));
+  }catch(e){}
+}
+function restore(){
+  // 저장소가 막힌 환경(시크릿 모드 등)에서도 기본값은 반드시 적용되어야 하므로
+  // 읽기만 try 로 감싸고, 나머지는 바깥에서 처리한다
+  let s = {};
+  try{ s = JSON.parse(localStorage.getItem(LSKEY) || '{}') || {}; }catch(e){ s = {}; }
+
+  // 모바일에서 처음 열면 1열 + 목록 닫힘으로 시작한다
+  if (s.cols === undefined && isMobile()){
+    document.getElementById('cols').value = '1';
+    setSide(true);
+  }
+  if (s.cols) document.getElementById('cols').value = s.cols;
+  applyCols();
+
+  if (s.fit){ document.getElementById('fit').checked = true; applyFit(); }
+  if (s.side) setSide(true);
+  if (s.mSens) document.getElementById('motionSens').value = s.mSens;
+  if (s.mRec)  document.getElementById('motionRec').checked = true;
+  if (s.rSec)  document.getElementById('rotateSec').value = s.rSec;
+  if (s.aiGap) document.getElementById('aiGap').value = s.aiGap;
+  if (s.aiModel) document.getElementById('aiModel').value = s.aiModel;
+  if (s.scanPool) document.getElementById('scanPool').value = s.scanPool;
+  if (s.mOn)  document.getElementById('motionOn').checked = true;
+  if (s.auto) document.getElementById('autoTrack').checked = true;
+  if (s.tab === 'smart' || s.tab === 'live') tab = s.tab;
+  return Array.isArray(s.selected) ? s.selected : [];
+}
+
+/* ---------------- 카메라 목록 ---------------- */
+async function loadNormal(){
+  const data = await (await fetch(`${BASE}/cctvs`, {cache:'no-store'})).json();
+  return data.filter(c => c.hlsAddr).map(c => ({
+    key : 'n:' + c.cctvId,
+    kind: 'normal',
+    name: c.instlPos || c.cctvId,
+    sub : addrOf(c.instlAddr, ''),
+    gu  : (String(c.instlAddr||'').match(/부산광역시\s*(\S+?[구군])/) || [,''])[1] || '',
+    lat : Number(c.lat), lon : Number(c.lot),
+    url : c.hlsAddr
+  })).sort((a,b) => a.name.localeCompare(b.name,'ko'));
+}
+
+// 부산시 API의 구·군 분류 보정.
+// 광안리해수욕장사거리(I000270)는 areaCodeNm이 '남구'로 들어오지만 실제로는 수영구다.
+// 근거: 같은 지점의 일반 CCTV '광안리해수욕장교차로' 주소가 '수영구 광안동 191-5'이고,
+//       남구로 분류된 나머지 교차로는 모두 위도 35.140 이하인데 이곳만 35.155다.
+const GU_FIX = { 'I000270': '수영구' };
+
+async function loadSmart(){
+  const list = (await (await fetch(`${BASE}/sints`, {cache:'no-store'})).json())
+    .filter(s => s.useFlag === '1')
+    .map(s => { if (GU_FIX[s.ixrId]) s.areaCodeNm = GU_FIX[s.ixrId]; return s; })
+    .sort((a,b) => (a.areaCodeNm||'').localeCompare(b.areaCodeNm||'','ko')
+                || (a.ixrNm||'').localeCompare(b.ixrNm||'','ko'));
+
+  let i = 0;
+  async function worker(){
+    while (i < list.length){
+      const s = list[i++];
+      try{
+        const raw = await (await fetch(`${BASE}/sints/${s.ixrId}/cameras`)).json();
+        s.cameras = raw.filter(c => c.hlsAddr).map(c => ({
+          key : 's:' + c.cmraId,
+          kind: 'smart',
+          name: s.ixrNm,
+          dir : dirOf(c),
+          spot: spotOf(c, s.ixrNm),
+          sub : addrOf(c.addr, s.areaCodeNm),
+          gu  : s.areaCodeNm || '',
+          lat : Number(c.cmraXCrdn) || Number(s.xcrdn),
+          lon : Number(c.cmraYCrdn) || Number(s.ycrdn),
+          url : c.hlsAddr,
+          ixr : s.ixrId
+        })).sort((a,b) => DIRORD.indexOf(a.dir) - DIRORD.indexOf(b.dir));
+      }catch(e){ s.cameras = []; }
+    }
+  }
+  await Promise.all(Array.from({length:8}, worker));
+  return list.filter(s => s.cameras.length);
+}
+
+function addrOf(addr, gu){
+  const a = String(addr || '').replace(/^부산광역시\s*/, '').trim();
+  if (!a) return gu || '';
+  return (gu && !a.startsWith(gu)) ? gu + ' · ' + a : a;
+}
+// drct: 1북 2동 3남 4서 5북동 6남동 7남서 8북서 (실데이터로 확인)
+const DRCT   = {'1':'북','2':'동','3':'남','4':'서','5':'북동','6':'남동','7':'남서','8':'북서'};
+const DIRORD = ['북','북동','동','남동','남','남서','서','북서','?'];
+function dirOf(c){
+  const s = String(c.istlLctn || c.hmpgIstlLctn || '');
+  const m = s.match(/[_\s]([북남동서]{1,2})(\(.\))?$/);
+  return m ? m[1] : (DRCT[String(c.drct)] || '?');
+}
+function spotOf(c, ixrNm){
+  let s = String(c.istlLctn || c.hmpgIstlLctn || '').trim();
+  if (ixrNm && s.startsWith(ixrNm)) s = s.slice(ixrNm.length).replace(/^[_\s-]+/, '');
+  return s;
+}
+
+/* ---------------- 목록 렌더링 ---------------- */
+function matches(c, q, gu){
+  return (!gu || c.gu === gu) &&
+         (!q  || (c.name + ' ' + (c.dir||'') + ' ' + (c.spot||'') + ' ' + c.sub).toLowerCase().includes(q));
+}
+const filters = () => [document.getElementById('q').value.trim().toLowerCase(),
+                       document.getElementById('gu').value];
+
+function visibleCams(){
+  const [q, gu] = filters();
+  if (tab === 'smart'){
+    const out = [];
+    sints.forEach(s => {
+      const groupHit = matches({name:s.ixrNm, sub:'', gu:s.areaCodeNm||'', dir:''}, q, gu);
+      const list = groupHit ? s.cameras : s.cameras.filter(c => matches(c, q, gu));
+      out.push(...list);
+    });
+    return out;
+  }
+  return cams.filter(c => c.kind === 'normal' && matches(c, q, gu));
+}
+
+function updateCount(n){
+  const el = document.getElementById('count');
+  if (tab === 'live'){ el.textContent = liveSummary(); return; }
+  el.textContent = tab === 'normal'
+    ? `${n}곳 표시 / 일반 CCTV ${cams.filter(c=>c.kind==='normal').length}곳 · 선택 ${selected.length}개`
+    : `${n}대 표시 / 교차로 ${sints.length}곳·카메라 ${sints.reduce((a,s)=>a+s.cameras.length,0)}대 · 선택 ${selected.length}개`;
+}
+
+function renderList(){
+  const box = document.getElementById('list');
+  document.getElementById('camFilters').style.display = tab === 'live' ? 'none' : '';
+
+  if (tab === 'live'){ renderLive(); return; }
+
+  const [q, gu] = filters();
+  if (tab === 'normal'){
+    const vis = cams.filter(c => c.kind === 'normal' && matches(c, q, gu));
+    updateCount(vis.length);
+    box.innerHTML = vis.map(c => rowHTML(c)).join('') ||
+      `<p style="color:var(--dim);padding:14px">검색 결과가 없습니다.</p>`;
+    return;
+  }
+
+  let html = '', shown = 0;
+  sints.forEach(s => {
+    const groupHit = matches({name:s.ixrNm, sub:'', gu:s.areaCodeNm||'', dir:''}, q, gu);
+    const list = groupHit ? s.cameras : s.cameras.filter(c => matches(c, q, gu));
+    if (!list.length) return;
+    shown += list.length;
+    html += `<div class="grp" data-ixr="${s.ixrId}">
+        <div><b>${esc(s.ixrNm)}</b> <em>${esc(s.areaCodeNm||'')}</em></div>
+        <button class="btn" data-add="${s.ixrId}">＋${s.cameras.length}방향</button>
+      </div>` + list.map(c => rowHTML(c, true)).join('');
+  });
+  updateCount(shown);
+  box.innerHTML = html || `<p style="color:var(--dim);padding:14px">검색 결과가 없습니다.</p>`;
+}
+
+function badge(c){ return (c.dir && c.spot && c.spot !== c.dir) ? `<i class="dir">${esc(c.dir)}</i>` : ''; }
+function camLabel(c){ return c.kind === 'smart' ? (c.spot || c.dir || c.name) : c.name; }
+function tileName(c){ return c.kind === 'smart' ? `${c.name} · ${camLabel(c)}` : c.name; }
+
+function rowHTML(c, sub){
+  return `<label class="cam${sub?' sub':''} ${selected.includes(c.key)?'on':''}" data-key="${c.key}">
+      <input type="checkbox" ${selected.includes(c.key)?'checked':''}>
+      <div><b>${badge(c)}${esc(camLabel(c))}</b><span>${esc(c.sub)}</span></div>
+    </label>`;
+}
+
+/* ---------------- 실시간 상황 (돌발·정체·침수) ---------------- */
+let live = {inc:[], con:[], flood:[], at:0};
+
+async function loadLive(){
+  const [inc, con, flood] = await Promise.all([
+    fetch(`${BASE}/incs/map`).then(r=>r.json()).catch(()=>[]),
+    fetch(`${BASE}/sxn-trfs/congestions`).then(r=>r.json()).catch(()=>[]),
+    fetch(`${BASE}/floods`).then(r=>r.json()).catch(()=>[])
+  ]);
+  live = {
+    inc  : (inc||[]).filter(i => i.lat && i.lot),
+    con  : (con||[]),
+    flood: (flood||[]).filter(f => f.floodingYn === 'Y'),
+    at   : Date.now()
+  };
+  const n = live.inc.length + live.con.length + live.flood.length;
+  const dot = document.getElementById('liveDot');
+  dot.style.display = n ? '' : 'none';
+  dot.textContent = n;
+  if (tab === 'live') renderLive();
+  if (document.getElementById('autoTrack').checked) applyAutoTrack();
+  refreshMapIncidents();
+}
+
+const liveSummary = () =>
+  `돌발 ${live.inc.length}건 · 정체 ${live.con.length}구간 · 침수 ${live.flood.length}곳` +
+  (live.at ? ` · ${new Date(live.at).toLocaleTimeString('ko-KR',{hour12:false})} 기준` : '');
+
+// 좌표에서 가장 가까운 카메라
+function nearestCams(lat, lon, n = 1){
+  return cams.filter(c => c.lat && c.lon)
+    .map(c => ({c, d: distM(lat, lon, c.lat, c.lon)}))
+    .sort((a,b) => a.d - b.d).slice(0, n);
+}
+// 정체구간의 시·종점 이름과 정확히 같은 이름의 카메라
+function sectionCams(s){
+  const out = [];
+  [s.bgngSxnNm, s.endSxnNm].filter(Boolean).forEach(nm => {
+    const c = cams.find(x => x.name === nm);
+    if (c && !out.includes(c)) out.push(c);
+  });
+  return out;
+}
+const KINDCLS = t => /정체|지체/.test(t) ? 'jam' : /침수/.test(t) ? 'flood' : /공사|작업/.test(t) ? 'work' : '';
+
+function renderLive(){
+  updateCount();
+  const rows = [];
+
+  live.flood.forEach(f => rows.push({
+    kind:'침수', cls:'flood', title:f.intNm, body:'도시침수 감지', time:'',
+    targets: nearestCams(+f.lat, +f.lot, 1).map(x => x.c), dist: null
+  }));
+
+  live.inc.forEach(i => {
+    const near = nearestCams(+i.lat, +i.lot, 1)[0];
+    rows.push({
+      kind:i.incTypeNm || '돌발', cls:KINDCLS(i.incTypeNm), title:i.incSpotNm || '',
+      body: decodeEnt(i.rcptCn || i.incCn || ''),
+      time: (i.ocrnDt || '').slice(5, 16),
+      targets: near ? [near.c] : [], dist: near ? Math.round(near.d) : null
+    });
+  });
+
+  live.con.forEach(s => {
+    const t = sectionCams(s);
+    rows.push({
+      kind:`${s.trfGradeNm||'정체'} ${Number(s.spd).toFixed(0)}km/h`, cls:'jam',
+      title:s.sxnNm, body:`${s.bgngSxnNm||''} → ${s.endSxnNm||''}`, time:'',
+      targets:t, dist:null
+    });
+  });
+
+  const box = document.getElementById('list');
+  if (!rows.length){
+    box.innerHTML = `<div class="evt none">진행 중인 돌발상황·정체구간이 없습니다.</div>`;
+    return;
+  }
+  box.innerHTML = rows.map((r, idx) => `
+    <div class="evt" data-evt="${idx}">
+      <div class="top"><span class="kind ${r.cls}">${esc(r.kind)}</span>
+        <b>${esc(r.title)}</b><time>${esc(r.time)}</time></div>
+      ${r.body ? `<p>${esc(r.body)}</p>` : ''}
+      <div class="go">${r.targets.length
+        ? '▶ ' + esc(r.targets.map(c => tileName(c)).join(', ')) + (r.dist != null ? ` (${r.dist}m)` : '')
+        : '가까운 CCTV 없음'}</div>
+    </div>`).join('');
+  box._rows = rows;
+}
+
+/* 돌발 자동추적: 상황 지점의 카메라를 자동으로 띄우고 배지를 붙인다 */
+const AUTO_MAX = 6;
+let autoKeys = new Set();
+
+function applyAutoTrack(){
+  const want = new Map();                       // key -> 배지 문구
+  live.flood.forEach(f => {
+    nearestCams(+f.lat, +f.lot, 1).forEach(x => want.set(x.c.key, `침수 감지 · ${f.intNm}`));
+  });
+  live.inc.forEach(i => {
+    const n = nearestCams(+i.lat, +i.lot, 1)[0];
+    if (n) want.set(n.c.key, `${i.incTypeNm} · ${i.incSpotNm}`);
+  });
+  live.con.forEach(s => {
+    sectionCams(s).forEach(c => want.set(c.key, `${s.trfGradeNm} ${Number(s.spd).toFixed(0)}km/h · ${s.sxnNm}`));
+  });
+
+  const keys = [...want.keys()].slice(0, AUTO_MAX);
+
+  // 자동으로 띄웠던 것 중 상황이 끝난 것은 내린다 (사용자가 직접 고른 것은 건드리지 않음)
+  autoKeys.forEach(k => {
+    if (!keys.includes(k)){ alerts.delete(k); toggle(k, false, true); autoKeys.delete(k); }
+  });
+  keys.forEach(k => {
+    alerts.set(k, want.get(k));
+    if (!selected.includes(k)){ toggle(k, true, true); autoKeys.add(k); }
+  });
+  commit();
+  applyAlerts();
+}
+function applyAlerts(){
+  players.forEach((p, key) => {
+    const a = alerts.get(key);
+    p.tile.classList.toggle('alert', !!a);
+    p.tile.querySelector('.alerttag').textContent = a || '';
+  });
+}
+function clearAutoTrack(){
+  autoKeys.forEach(k => { alerts.delete(k); toggle(k, false, true); });
+  autoKeys.clear();
+  alerts.clear();
+  commit();
+  applyAlerts();
+}
+
+/* ---------------- 선택 ---------------- */
+function toggle(key, on, quiet){
+  const i = selected.indexOf(key);
+  if (on && i < 0) selected.push(key);
+  if (!on && i >= 0) selected.splice(i, 1);
+
+  const row = document.querySelector(`.cam[data-key="${CSS.escape(key)}"]`);
+  if (row){
+    row.classList.toggle('on', on);
+    const b = row.querySelector('input');
+    if (b.checked !== on) b.checked = on;
+  }
+  if (!quiet) commit();
+}
+function commit(){
+  updateCount(document.querySelectorAll('.cam').length);
+  syncGrid(); save(); refreshMapStyles();
+}
+
+/* ---------------- 그리드 ---------------- */
+function syncGrid(){
+  [...players.keys()].forEach(k => { if(!selected.includes(k)) destroyTile(k); });
+  selected.forEach(k => { if(!players.has(k)) createTile(k); });
+  applyOrder();
+
+  const empty = document.getElementById('empty');
+  if (empty) empty.style.display = selected.length ? 'none' : '';
+  document.getElementById('playing').textContent = selected.length ? `${selected.length}개 재생 중` : '';
+}
+
+// DOM을 옮기지 않고 CSS order 로만 자리를 바꾼다 — 영상이 끊기지 않는다
+function applyOrder(){
+  selected.forEach((k, i) => {
+    const p = players.get(k);
+    if (p) p.tile.style.order = i + 1;
+  });
+}
+
+/* 한 화면 크게 보기.
+   위치·크기가 바뀌는 것을 FLIP 기법으로 애니메이션한다 —
+   바뀐 뒤 좌표를 먼저 재고, 원래 자리로 되돌리는 transform 을 건 다음 그것을 푼다. */
+// 백그라운드 탭에서는 rAF 가 멈추므로 타이머 폴백을 함께 건다 (한 번만 실행)
+function nextFrame(cb){
+  let done = false;
+  const run = () => { if (done) return; done = true; cb(); };
+  requestAnimationFrame(run);
+  setTimeout(run, 40);
+}
+let zoomKey = null;
+function toggleZoom(key){
+  const p = players.get(key); if (!p) return;
+  setZoom(p, zoomKey !== key);
+}
+function setZoom(p, on){
+  if (zoomKey && zoomKey !== p.key) setZoom(players.get(zoomKey), false);   // 하나만 확대
+
+  const el = p.tile, grid = document.getElementById('grid'), veil = document.getElementById('zoomVeil');
+  const first = el.getBoundingClientRect();
+
+  if (on){
+    const g = grid.getBoundingClientRect();
+    el.classList.add('zoom');
+    el.style.left = g.left + 'px';  el.style.top    = g.top + 'px';
+    el.style.width = g.width + 'px'; el.style.height = g.height + 'px';
+    grid.classList.add('haszoom');
+    veil.classList.add('on');
+    nextFrame(() => veil.classList.add('show'));
+    zoomKey = p.key;
+  } else {
+    el.classList.remove('zoom');
+    el.style.left = el.style.top = el.style.width = el.style.height = '';
+    grid.classList.remove('haszoom');
+    veil.classList.remove('show');
+    setTimeout(() => { if (!zoomKey) veil.classList.remove('on'); }, 300);
+    zoomKey = null;
+  }
+
+  const btn = el.querySelector('.tools [data-a="full"]');
+  if (btn){ btn.textContent = on ? '⤡' : '⛶'; btn.title = on ? '작게 (Esc)' : '크게 보기'; }
+
+  // FLIP
+  const last = el.getBoundingClientRect();
+  const dx = first.left - last.left, dy = first.top - last.top;
+  const sx = last.width  ? first.width  / last.width  : 1;
+  const sy = last.height ? first.height / last.height : 1;
+  el.style.transformOrigin = 'top left';
+  el.style.transition = 'none';
+  el.style.transform = `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`;
+  nextFrame(() => {
+    el.style.transition = 'transform .28s cubic-bezier(.4,0,.2,1)';
+    el.style.transform  = '';
+    clearTimeout(el._flip);
+    el._flip = setTimeout(() => { el.style.transition = ''; el.style.transformOrigin = ''; }, 320);
+  });
+}
+
+/* 드래그로 타일 자리 바꾸기.
+   HTML5 드래그앤드롭은 터치에서 전혀 발생하지 않으므로 포인터 이벤트로 직접 구현한다.
+   마우스·터치·펜이 같은 코드로 동작한다. */
+let dragKey = null, dragFrom = null;
+function onDragDown(e, p){
+  if (e.target.closest('.tools')) return;
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  if (zoomKey === p.key) return;                  // 확대 중에는 자리 이동 없음
+  dragKey = p.key; dragFrom = {x:e.clientX, y:e.clientY};
+  try{ e.currentTarget.setPointerCapture(e.pointerId); }catch(_){}
+}
+function onDragMove(e){
+  if (!dragKey || !dragFrom) return;
+  const p = players.get(dragKey); if (!p) return;
+
+  // 살짝 움직인 정도로는 시작하지 않는다 (탭·더블탭과 구분)
+  if (!p.tile.classList.contains('dragging')){
+    if (Math.hypot(e.clientX - dragFrom.x, e.clientY - dragFrom.y) < 8) return;
+    p.tile.classList.add('dragging');
+  }
+  e.preventDefault();
+
+  const el = document.elementFromPoint(e.clientX, e.clientY);
+  const over = el && el.closest('.tile');
+  document.querySelectorAll('.tile.dropzone').forEach(t => t.classList.remove('dropzone'));
+  if (!over || over === p.tile) return;
+
+  const key = [...players.entries()].find(([, q]) => q.tile === over)?.[0];
+  if (!key) return;
+  over.classList.add('dropzone');
+  const from = selected.indexOf(dragKey), to = selected.indexOf(key);
+  if (from < 0 || to < 0 || from === to) return;
+  selected.splice(from, 1);
+  selected.splice(to, 0, dragKey);
+  applyOrder();
+}
+function onDragUp(){
+  const moved = dragKey && players.get(dragKey)?.tile.classList.contains('dragging');
+  dragKey = null; dragFrom = null;
+  document.querySelectorAll('.tile.dragging,.tile.dropzone')
+    .forEach(t => t.classList.remove('dragging', 'dropzone'));
+  if (moved) save();
+}
+
+function createTile(key){
+  const cam = byKey.get(key);
+  if (!cam) return;
+
+  const tile = document.createElement('div');
+  tile.className = 'tile' + (cam.kind === 'smart' ? ' smart' : '');
+  tile.innerHTML = `
+    <video muted playsinline autoplay></video>
+    <div class="cap">
+      <span class="grip" title="끌어서 자리 옮기기">⠿</span>
+      ${badge(cam)}
+      <span>${esc(tileName(cam))}</span>
+      <i class="cnt veh">🚗 0</i>
+      <i class="cnt ped">🚶 0</i>
+      <i class="cnt flow"></i>
+      <i class="rectag"></i>
+      <div class="tools">
+        <button data-a="line"   title="검지선 긋기 / 지우기 — 선을 넘는 차량을 셉니다">📏</button>
+        <button data-a="rec"    title="이 화면만 녹화 / 정지 후 저장">⏺</button>
+        <button data-a="reload" title="새로고침">⟳</button>
+        <button data-a="full"   title="크게 보기">⛶</button>
+        <button data-a="close"  title="닫기">✕</button>
+      </div>
+    </div>
+    <canvas class="det"></canvas>
+    <div class="drawhint">차량이 지나는 길을 가로지르도록<br><b>두 점</b>을 클릭하세요 (Esc 취소)</div>
+    <div class="stat">연결 중…</div>
+    <i class="alerttag"></i>
+    <div class="mbar"><i></i></div>`;
+
+  document.getElementById('grid').appendChild(tile);
+  const p = { tile, video: tile.querySelector('video'), cam, key,
+              hls:null, watchdog:null, lastTime:-1, stall:0, retry:0,
+              mPrev:null, mLevel:0, lastMotion:0 };
+  players.set(key, p);
+
+  const cap = tile.querySelector('.cap');
+  cap.style.touchAction = 'none';                 // 끌 때 화면이 같이 스크롤되지 않도록
+  cap.addEventListener('pointerdown', e => onDragDown(e, p));
+  cap.addEventListener('pointermove', onDragMove);
+  cap.addEventListener('pointerup', onDragUp);
+  cap.addEventListener('pointercancel', onDragUp);
+
+  tile.querySelector('.tools').addEventListener('click', e => {
+    const a = e.target.dataset.a; if(!a) return;
+    e.preventDefault(); e.stopPropagation();
+    // 확대 상태에서 ✕ 는 '닫기'가 아니라 '작게'로 동작한다 (실수로 화면이 사라지지 않도록)
+    if (a === 'close')  zoomKey === key ? setZoom(p, false) : toggle(key, false);
+    if (a === 'reload') start(p);
+    if (a === 'full')   toggleZoom(key);
+    if (a === 'rec')    p.rec ? stopRec(p) : startRec(p);
+    if (a === 'line'){
+      if (lines[key]) clearLine(key);
+      else if (!document.getElementById('aiOn').checked) alert('먼저 상단의 🤖 AI 검지를 켜주세요.');
+      else beginDraw(key);
+    }
+  });
+
+  // 검지선 그리기 중 클릭 받기
+  tile.querySelector('.det').addEventListener('click', e => {
+    if (drawKey === key) onDrawClick(p, e);
+  });
+
+  if (lines[key]){
+    tile.classList.add('lined');
+    tile.querySelector('[data-a="line"]').classList.add('lineon');
+    p.flow = newFlow();
+  }
+
+  // 영상 부분을 더블클릭해도 크게/작게
+  tile.addEventListener('dblclick', e => {
+    if (e.target.closest('.tools')) return;
+    toggleZoom(key);
+  });
+
+  const a = alerts.get(key);
+  if (a){ tile.classList.add('alert'); tile.querySelector('.alerttag').textContent = a; }
+
+  start(p);
+}
+
+function start(p){
+  stop(p);
+  p.tile.classList.remove('err');
+  setStat(p, '연결 중…');
+
+  if (window.Hls && Hls.isSupported()){
+    const hls = new Hls({
+      lowLatencyMode: false,
+      liveSyncDurationCount: 2,
+      maxBufferLength: 8,
+      backBufferLength: 10,
+      manifestLoadingMaxRetry: 4,
+      levelLoadingMaxRetry: 4,
+      fragLoadingMaxRetry: 6
+    });
+    p.hls = hls;
+    hls.loadSource(p.cam.url);
+    hls.attachMedia(p.video);
+    hls.on(Hls.Events.MANIFEST_PARSED, () => p.video.play().catch(()=>{}));
+    hls.on(Hls.Events.FRAG_BUFFERED, () => { setStat(p, ''); p.retry = 0; });
+    hls.on(Hls.Events.ERROR, (_, d) => {
+      if (!d.fatal) return;
+      if (d.type === Hls.ErrorTypes.NETWORK_ERROR)    { setStat(p,'네트워크 재시도 중…'); hls.startLoad(); }
+      else if (d.type === Hls.ErrorTypes.MEDIA_ERROR) { setStat(p,'영상 복구 중…');       hls.recoverMediaError(); }
+      else                                            { fail(p); }
+    });
+  } else if (p.video.canPlayType('application/vnd.apple.mpegurl')){
+    p.video.src = p.cam.url;
+    p.video.addEventListener('playing', () => setStat(p, ''), {once:true});
+    p.video.addEventListener('error',   () => fail(p),        {once:true});
+    p.video.play().catch(()=>{});
+  } else {
+    setStat(p, '이 브라우저는 HLS를 지원하지 않습니다');
+    p.tile.classList.add('err');
+    return;
+  }
+
+  p.watchdog = setInterval(() => {
+    const t = p.video.currentTime;
+    if (t === p.lastTime){ if (++p.stall >= 4){ p.stall = 0; retry(p); } }
+    else p.stall = 0;
+    p.lastTime = t;
+  }, 3000);
+}
+
+function retry(p){
+  if (++p.retry > 5){ fail(p); return; }
+  setStat(p, `신호 없음 — 재연결 ${p.retry}/5`);
+  start(p);
+}
+function fail(p){
+  stop(p);
+  p.tile.classList.add('err');
+  setStat(p, '영상을 불러올 수 없습니다\n(카메라 점검 중일 수 있음) — ⟳ 로 재시도');
+}
+function setStat(p, msg){
+  const el = p.tile.querySelector('.stat');
+  el.textContent = msg;
+  el.style.display = msg ? '' : 'none';
+}
+function stop(p){
+  stopRec(p);                       // 소스를 끊기 전에 녹화를 마무리해 파일을 남긴다
+  if (p.watchdog){ clearInterval(p.watchdog); p.watchdog = null; }
+  if (p.hls){ try{ p.hls.destroy(); }catch(e){} p.hls = null; }
+  try{ p.video.removeAttribute('src'); p.video.load(); }catch(e){}
+  p.lastTime = -1; p.stall = 0; p.mPrev = null;
+}
+function destroyTile(key){
+  const p = players.get(key); if(!p) return;
+  if (zoomKey === key) setZoom(p, false);      // 확대된 화면이 사라지면 덮개도 함께 걷는다
+  stop(p); p.tile.remove(); players.delete(key);
+}
+
+/* ---------------- 모션 감지 ---------------- */
+const MW = 64, MH = 48;
+let motionTimer = null;
+function motionTick(){
+  const on = document.getElementById('motionOn').checked;
+  if (!on) return;
+  const sens = Number(document.getElementById('motionSens').value);
+  const thr  = (101 - sens) / 20;          // 감도 100 → 0.05%, 감도 1 → 5%
+  const autoRec = document.getElementById('motionRec').checked;
+  const now = Date.now();
+
+  players.forEach(p => {
+    const v = p.video;
+    if (!v.videoWidth){ p.mLevel = 0; return; }
+    if (!p.mCanvas){
+      p.mCanvas = document.createElement('canvas');
+      p.mCanvas.width = MW; p.mCanvas.height = MH;
+      p.mCtx = p.mCanvas.getContext('2d', {willReadFrequently:true});
+    }
+    let cur;
+    try{
+      p.mCtx.drawImage(v, 0, 0, MW, MH);
+      cur = p.mCtx.getImageData(0, 0, MW, MH).data;
+    }catch(e){ return; }
+
+    if (p.mPrev){
+      let sum = 0;
+      for (let i = 0; i < cur.length; i += 4) sum += Math.abs(cur[i] - p.mPrev[i]);
+      p.mLevel = (sum / (cur.length / 4)) / 255 * 100;
+    }
+    p.mPrev = cur;
+
+    const moving = p.mLevel > thr;
+    p.tile.classList.toggle('moving', moving);
+    p.tile.querySelector('.mbar i').style.width = Math.min(100, p.mLevel * 12) + '%';
+    if (moving) p.lastMotion = now;
+
+    if (autoRec){
+      if (moving && !p.rec) startRec(p, true);
+      else if (p.rec && p.recAuto && now - p.lastMotion > 5000) stopRec(p);
+    }
+  });
+}
+function applyMotion(){
+  const on = document.getElementById('motionOn').checked;
+  document.body.classList.toggle('motion', on);
+  clearInterval(motionTimer); motionTimer = null;
+  if (on) motionTimer = setInterval(motionTick, 500);
+  else players.forEach(p => { p.tile.classList.remove('moving'); p.mPrev = null; });
+}
+
+/* ---------------- 녹화 ---------------- */
+const MIMES = ['video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm','video/mp4'];
+function pickMime(){
+  if (!window.MediaRecorder) return null;
+  for (const m of MIMES){ try{ if (MediaRecorder.isTypeSupported(m)) return m; }catch(e){} }
+  return '';
+}
+const extOf   = m => String(m).includes('mp4') ? 'mp4' : 'webm';
+const mmss    = s => `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
+const safeName= s => String(s).replace(/[\\/:*?"<>|]+/g,'_').replace(/\s+/g,' ').trim();
+function stamp(){
+  const d = new Date(), p = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+function saveBlob(blob, name){
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 15000);
+}
+function grabStream(v){
+  try{
+    if (v.captureStream)    return v.captureStream();
+    if (v.mozCaptureStream) return v.mozCaptureStream();
+  }catch(e){}
+  return null;
+}
+
+function startRec(p, auto){
+  if (p.rec) return;
+  const mime = pickMime();
+  if (mime === null){ if(!auto) alert('이 브라우저는 녹화를 지원하지 않습니다.'); return; }
+  if (!p.video.videoWidth){ if(!auto) alert('영상이 나온 뒤에 녹화를 시작하세요.'); return; }
+
+  const stream = grabStream(p.video);
+  if (!stream || !stream.getVideoTracks().length){
+    if(!auto) alert('이 브라우저에서는 개별 녹화를 지원하지 않습니다.\n상단의 "⏺ 화면녹화"를 사용하세요.');
+    return;
+  }
+
+  const chunks = []; let size = 0;
+  let rec;
+  try{
+    rec = new MediaRecorder(stream, mime ? {mimeType:mime, videoBitsPerSecond:4_000_000} : undefined);
+  }catch(e){ if(!auto) alert('녹화를 시작할 수 없습니다: ' + e.message); return; }
+
+  const tag = p.tile.querySelector('.rectag');
+  const btn = p.tile.querySelector('.tools [data-a="rec"]');
+  const base = (auto ? '모션_' : '') + tileName(p.cam);
+  const t0 = Date.now();
+
+  rec.ondataavailable = e => { if (e.data && e.data.size){ chunks.push(e.data); size += e.data.size; } };
+  rec.onstop = () => {
+    clearInterval(p.recTimer); p.recTimer = null; p.rec = null; p.recAuto = false;
+    p.tile.classList.remove('rec'); btn.classList.remove('on'); tag.textContent = '';
+    stream.getTracks().forEach(t => t.stop());
+    if (!chunks.length) return;
+    const blob = new Blob(chunks, {type: chunks[0].type || mime || 'video/webm'});
+    if (auto && blob.size < 120000) return;      // 너무 짧은 오탐은 버린다
+    saveBlob(blob, `부산CCTV_${safeName(base)}_${stamp()}.${extOf(blob.type || mime)}`);
+  };
+
+  p.rec = rec; p.recAuto = !!auto;
+  rec.start(1000);
+  p.tile.classList.add('rec'); btn.classList.add('on');
+  tag.textContent = '00:00';
+  p.recTimer = setInterval(() => {
+    tag.textContent = `${mmss(Math.floor((Date.now()-t0)/1000))} · ${(size/1048576).toFixed(1)}MB`;
+  }, 500);
+}
+function stopRec(p){
+  if (p.rec && p.rec.state !== 'inactive'){ try{ p.rec.stop(); }catch(e){} }
+}
+
+// 격자 전체를 하나의 영상으로 (캔버스 합성 — 권한 창 없이 동작)
+const FPS = 15;
+let screenRec = null;
+function toggleScreenRec(){
+  const btn = document.getElementById('recScreen');
+  if (screenRec){ if (screenRec.state !== 'inactive') screenRec.stop(); return; }
+
+  const mime = pickMime();
+  if (mime === null){ alert('이 브라우저는 녹화를 지원하지 않습니다.'); return; }
+  const keys = selected.filter(k => players.has(k));
+  if (!keys.length){ alert('먼저 볼 CCTV를 선택하세요.'); return; }
+
+  const cols = Math.min(Number(document.getElementById('cols').value) || 3, keys.length);
+  const rows = Math.ceil(keys.length / cols);
+  const cw = Math.max(160, Math.floor(Math.min(640, 1920 / cols) / 2) * 2);
+  const ch = Math.floor(cw * 3 / 4 / 2) * 2;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = cw * cols; canvas.height = ch * rows;
+  const ctx = canvas.getContext('2d');
+  const stream = canvas.captureStream(FPS);
+
+  let rec;
+  try{
+    rec = new MediaRecorder(stream, mime ? {mimeType:mime, videoBitsPerSecond:6_000_000} : undefined);
+  }catch(e){ alert('녹화를 시작할 수 없습니다: ' + e.message); return; }
+
+  const chunks = []; let size = 0;
+  const draw = () => {
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    keys.forEach((k, i) => {
+      const x = (i % cols) * cw, y = Math.floor(i / cols) * ch;
+      const p = players.get(k), v = p?.video;
+      if (v && v.videoWidth){
+        const s = Math.min(cw / v.videoWidth, ch / v.videoHeight);
+        const w = v.videoWidth * s, h = v.videoHeight * s;
+        try{ ctx.drawImage(v, x + (cw - w)/2, y + (ch - h)/2, w, h); }catch(e){}
+      }
+      const cam = byKey.get(k);
+      if (cam){
+        const label = tileName(cam);
+        ctx.font = 'bold 13px "Malgun Gothic", sans-serif'; ctx.textBaseline = 'top';
+        ctx.fillStyle = 'rgba(0,0,0,.6)';
+        ctx.fillRect(x, y, ctx.measureText(label).width + 12, 20);
+        ctx.fillStyle = '#fff'; ctx.fillText(label, x + 6, y + 4);
+        const al = alerts.get(k);
+        if (al){
+          ctx.fillStyle = 'rgba(255,77,79,.85)';
+          ctx.fillRect(x, y + ch - 20, ctx.measureText(al).width + 12, 20);
+          ctx.fillStyle = '#fff'; ctx.fillText(al, x + 6, y + ch - 16);
+        }
+      }
+      ctx.strokeStyle = 'rgba(255,255,255,.15)';
+      ctx.strokeRect(x + .5, y + .5, cw - 1, ch - 1);
+    });
+    const now = new Date().toLocaleString('ko-KR', {hour12:false});
+    ctx.font = 'bold 13px "Malgun Gothic", sans-serif';
+    const tw = ctx.measureText(now).width;
+    ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fillRect(canvas.width - tw - 12, 0, tw + 12, 20);
+    ctx.fillStyle = '#ffd964'; ctx.fillText(now, canvas.width - tw - 6, 4);
+  };
+
+  rec.ondataavailable = e => { if (e.data && e.data.size){ chunks.push(e.data); size += e.data.size; } };
+  rec.onstop = () => {
+    clearInterval(painter); clearInterval(timer); screenRec = null;
+    stream.getTracks().forEach(t => t.stop());
+    btn.classList.remove('on'); btn.textContent = '⏺ 화면녹화';
+    if (!chunks.length) return;
+    const blob = new Blob(chunks, {type: chunks[0].type || mime || 'video/webm'});
+    saveBlob(blob, `부산CCTV_${keys.length}분할_${stamp()}.${extOf(blob.type || mime)}`);
+  };
+
+  draw();
+  const painter = setInterval(draw, Math.round(1000 / FPS));
+  screenRec = rec; rec.start(1000);
+  const t0 = Date.now();
+  btn.classList.add('on');
+  const timer = setInterval(() => {
+    btn.textContent = `⏹ ${mmss(Math.floor((Date.now()-t0)/1000))} · ${(size/1048576).toFixed(0)}MB`;
+  }, 500);
+}
+
+/* ---------------- 순회 모드 ---------------- */
+let rotateOn = false, rotateTimer = null, rotatePool = [], rotatePage = 0, rotateBackup = [];
+function pageSize(){ return Math.max(1, (Number(document.getElementById('cols').value) || 3) * 2); }
+
+function startRotate(){
+  rotatePool = visibleCams().map(c => c.key);
+  if (rotatePool.length <= pageSize()){
+    alert(`순회할 카메라가 부족합니다.\n왼쪽 목록의 필터를 넓혀서 ${pageSize()+1}개 이상 보이게 해주세요.`);
+    document.getElementById('rotateOn').checked = false;
+    return;
+  }
+  rotateBackup = [...selected];
+  rotateOn = true; rotatePage = 0;
+  showRotatePage();
+  clearInterval(rotateTimer);
+  rotateTimer = setInterval(() => {
+    rotatePage = (rotatePage + 1) % Math.ceil(rotatePool.length / pageSize());
+    showRotatePage();
+  }, Number(document.getElementById('rotateSec').value) * 1000);
+}
+function showRotatePage(){
+  const n = pageSize(), total = Math.ceil(rotatePool.length / n);
+  selected = rotatePool.slice(rotatePage * n, rotatePage * n + n);
+  syncGrid(); applyAlerts();
+  document.getElementById('rotateInfo').textContent = `${rotatePage+1}/${total} 페이지 · ${rotatePool.length}대`;
+}
+function stopRotate(){
+  clearInterval(rotateTimer); rotateTimer = null; rotateOn = false;
+  document.getElementById('rotateInfo').textContent = '';
+  selected = rotateBackup;
+  syncGrid(); renderList(); applyAlerts(); save();
+}
+
+/* ---------------- 프리셋 ---------------- */
+const loadPresets = () => { try{ return JSON.parse(localStorage.getItem(PSKEY) || '{}'); }catch(e){ return {}; } };
+const savePresets = o => { try{ localStorage.setItem(PSKEY, JSON.stringify(o)); }catch(e){} };
+function renderPresets(){
+  const o = loadPresets(), sel = document.getElementById('presetSel');
+  sel.innerHTML = `<option value="">— 불러오기 —</option>` +
+    Object.keys(o).sort((a,b)=>a.localeCompare(b,'ko'))
+      .map(n => `<option value="${esc(n)}">${esc(n)} (${o[n].keys.length})</option>`).join('');
+}
+
+/* ---------------- 지도 ---------------- */
+let map = null, camLayer = null, incLayer = null;
+const markers = new Map();
+function openMap(){
+  document.getElementById('mapWrap').classList.add('on');
+  if (!map){
+    if (!window.L){ alert('지도 라이브러리를 불러오지 못했습니다. 인터넷 연결을 확인하세요.'); return; }
+    map = L.map('map', {preferCanvas:true}).setView([35.16, 129.07], 12);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom:19, attribution:'© OpenStreetMap'
+    }).addTo(map);
+    camLayer = L.layerGroup().addTo(map);
+    incLayer = L.layerGroup().addTo(map);
+
+    cams.filter(c => c.lat && c.lon).forEach(c => {
+      const m = L.circleMarker([c.lat, c.lon], markerStyle(c))
+        .bindTooltip(tileName(c), {direction:'top'})
+        .on('click', () => { toggle(c.key, !selected.includes(c.key)); renderList(); });
+      m._cam = c;
+      markers.set(c.key, m);
+      camLayer.addLayer(m);
+    });
+    refreshMapIncidents();
+  }
+  setTimeout(() => { map.invalidateSize(); refreshMapStyles(); }, 60);
+}
+// 관측값이 있으면 교통량 색으로, 없으면 종류 색으로 칠한다
+const HEAT = n => n >= 20 ? '#ff4d4f' : n >= 12 ? '#ff8c42' : n >= 6 ? '#ffd964' : n >= 1 ? '#7fe08a' : '#5a6472';
+function markerStyle(c){
+  const on = selected.includes(c.key);
+  const ob = latest.get(c.key);
+  const col = ob ? HEAT(ob.veh) : (c.kind === 'smart' ? '#ffb454' : '#4da3ff');
+  return {radius: on ? 8 : (ob ? 6 : 5), color: on ? '#fff' : col, weight: on ? 2 : 1,
+          fillColor: col, fillOpacity: on ? 1 : (ob ? .9 : .55)};
+}
+function refreshMapStyles(){
+  if (!map) return;
+  markers.forEach((m, k) => m.setStyle(markerStyle(m._cam)));
+  document.getElementById('mapCount').textContent = `선택 ${selected.length}개`;
+}
+function refreshMapIncidents(){
+  if (!map || !incLayer) return;
+  incLayer.clearLayers();
+  live.inc.forEach(i => {
+    L.circleMarker([+i.lat, +i.lot], {radius:9, color:'#fff', weight:2, fillColor:'#ff4d4f', fillOpacity:.95})
+      .bindTooltip(`[${i.incTypeNm}] ${i.incSpotNm}`, {direction:'top'})
+      .on('click', () => {
+        const n = nearestCams(+i.lat, +i.lot, 1)[0];
+        if (n){ toggle(n.c.key, true); renderList(); }
+      })
+      .addTo(incLayer);
+  });
+}
+function nearMe(count = 4){
+  if (!navigator.geolocation){ alert('이 브라우저는 위치 기능을 지원하지 않습니다.'); return; }
+  navigator.geolocation.getCurrentPosition(pos => {
+    const {latitude:la, longitude:lo} = pos.coords;
+    const near = nearestCams(la, lo, count);
+    if (!near.length){ alert('가까운 CCTV를 찾지 못했습니다.'); return; }
+    near.forEach(x => toggle(x.c.key, true, true));
+    commit(); renderList();
+    if (map){ map.setView([la, lo], 15); }
+    alert('가까운 CCTV ' + near.map(x => `${tileName(x.c)}(${Math.round(x.d)}m)`).join(', ') + ' 을(를) 띄웠습니다.');
+  }, err => alert('위치를 가져오지 못했습니다: ' + err.message), {timeout:10000});
+}
+
+/* ================= AI 교통량 관측 =================
+   TensorFlow.js + COCO-SSD 를 브라우저(GPU)에서 돌려 차량·보행자를 '센다'.
+   익명 상자만 세며 번호판 판독·얼굴 인식·개인 추적은 하지 않는다.        */
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const VEH = ['car','bus','truck','motorcycle'];
+const COLOR = {car:'#7fe08a', bus:'#ffd964', truck:'#ff9f6b', motorcycle:'#ffa8f0', bicycle:'#c0a8ff', person:'#9ad4ff'};
+
+let aiOn = false, aiModel = null, aiModelName = '', aiLoading = false, aiPumping = false;
+
+async function ensureModel(){
+  const want = document.getElementById('aiModel').value;
+  if (aiModel && aiModelName === want) return aiModel;
+  aiLoading = true; setAiStat('AI 모델 준비 중… (최초 1회, 13MB)');
+  try{
+    if (!window.tf){
+      await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js');
+      await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js');
+    }
+    try{ await tf.setBackend('webgl'); }catch(e){ await tf.setBackend('cpu'); }
+    await tf.ready();
+    aiModel = await cocoSsd.load({base: want});
+    aiModelName = want;
+    setAiStat(`준비됨 · ${tf.getBackend().toUpperCase()}`);
+  }catch(e){
+    setAiStat('모델을 불러오지 못했습니다 (인터넷 확인)');
+    aiModel = null;
+  }
+  aiLoading = false;
+  return aiModel;
+}
+function loadScript(src){
+  return new Promise((ok, no) => {
+    const s = document.createElement('script');
+    s.src = src; s.onload = ok; s.onerror = () => no(new Error(src));
+    document.head.appendChild(s);
+  });
+}
+const setAiStat = t => document.getElementById('aiStat').textContent = t;
+
+/* ===== 통과 대수 계수: 객체 추적 + 검지선 =====
+   프레임마다 검지된 상자를 이전 프레임의 궤적과 이어붙이고(추적),
+   궤적이 사용자가 그은 선을 '넘어갈 때만' 1대로 센다.
+   → 화면에 몇 대 보이는가(밀도)가 아니라, 몇 대가 지나갔는가(유량)를 잰다. */
+const LINES_KEY = 'busan-cctv-lines-v1';
+let lines = (() => { try{ return JSON.parse(localStorage.getItem(LINES_KEY) || '{}'); }catch(e){ return {}; } })();
+const saveLines = () => { try{ localStorage.setItem(LINES_KEY, JSON.stringify(lines)); }catch(e){} };
+
+const cross2 = (ax,ay,bx,by) => ax*by - ay*bx;
+const sideOf = (L,x,y) => Math.sign(cross2(L.x2-L.x1, L.y2-L.y1, x-L.x1, y-L.y1));
+// 두 선분이 실제로 교차하는지 (무한 직선이 아니라 그은 구간에서만 센다)
+function segCross(ax,ay,bx,by, cx,cy,dx,dy){
+  const d1 = Math.sign(cross2(dx-cx, dy-cy, ax-cx, ay-cy));
+  const d2 = Math.sign(cross2(dx-cx, dy-cy, bx-cx, by-cy));
+  const d3 = Math.sign(cross2(bx-ax, by-ay, cx-ax, cy-ay));
+  const d4 = Math.sign(cross2(bx-ax, by-ay, dx-ax, dy-ay));
+  return d1 !== d2 && d3 !== d4;
+}
+
+function newFlow(){
+  const t = Date.now();
+  return {ab:0, ba:0, byCls:{}, t0:t, lastAB:0, lastBA:0, lastAt:t};
+}
+// 그리디 매칭: 가까운 중심점끼리 잇는다 (SORT 계열의 최소 구현)
+function trackUpdate(p, dets){
+  if (!p.trk) p.trk = {tracks:[], nextId:1};
+  const T = p.trk.tracks;
+  T.forEach(t => t.matched = false);
+  const events = [];
+
+  dets.forEach(d => {
+    let best = null, bestD = Infinity;
+    // 등속으로 다음 위치를 예측한 뒤 그 주변에서 찾는다 — 빠른 차도 궤적이 끊기지 않는다
+    const lim = Math.max(90, Math.max(d.w, d.h) * 3);
+    T.forEach(t => {
+      if (t.matched || t.cls !== d.cls) return;
+      const dist = Math.hypot((t.cx + t.vx) - d.cx, (t.cy + t.vy) - d.cy);
+      if (dist < bestD && dist < lim){ bestD = dist; best = t; }
+    });
+    if (best){
+      best.px = best.cx; best.py = best.cy;
+      // 속도는 완만하게 갱신 (검지 흔들림에 덜 휘둘리도록)
+      best.vx = best.vx * .4 + (d.cx - best.cx) * .6;
+      best.vy = best.vy * .4 + (d.cy - best.cy) * .6;
+      best.cx = d.cx; best.cy = d.cy; best.w = d.w; best.h = d.h;
+      best.matched = true; best.miss = 0; best.hits++;
+    } else {
+      T.push({id:p.trk.nextId++, cls:d.cls, cx:d.cx, cy:d.cy, px:d.cx, py:d.cy,
+              vx:0, vy:0, w:d.w, h:d.h, matched:true, miss:0, hits:1, counted:false});
+    }
+  });
+
+  const L = lines[p.key];
+  if (L){
+    const line = {x1:L.x1*p.video.videoWidth, y1:L.y1*p.video.videoHeight,
+                  x2:L.x2*p.video.videoWidth, y2:L.y2*p.video.videoHeight};
+    T.forEach(t => {
+      if (t.counted || t.hits < 2 || !t.matched) return;
+      if (!segCross(t.px, t.py, t.cx, t.cy, line.x1, line.y1, line.x2, line.y2)) return;
+      const dir = sideOf(line, t.cx, t.cy) > 0 ? 'ab' : 'ba';
+      t.counted = true;
+      p.flow[dir]++;
+      p.flow.byCls[t.cls] = (p.flow.byCls[t.cls] || 0) + 1;
+      events.push({cls:t.cls, dir});
+    });
+  }
+
+  // 놓친 궤적은 관성으로 잠시 이어간다 (한두 프레임 검지 실패로 궤적이 끊기지 않도록)
+  p.trk.tracks = T.filter(t => {
+    if (!t.matched){
+      t.miss++;
+      t.px = t.cx; t.py = t.cy;
+      t.cx += t.vx; t.cy += t.vy;
+    }
+    return t.miss <= 3;
+  });
+  return events;
+}
+
+// 검지선 그리기 모드
+let drawKey = null, drawPt = null;
+function beginDraw(key){
+  const p = players.get(key); if (!p) return;
+  drawKey = key; drawPt = null;
+  p.tile.classList.add('drawing');
+}
+function endDraw(){
+  if (drawKey){ players.get(drawKey)?.tile.classList.remove('drawing'); }
+  drawKey = null; drawPt = null;
+}
+function onDrawClick(p, e){
+  const cv = p.tile.querySelector('.det'), r = cv.getBoundingClientRect();
+  const v = p.video;
+  const s  = Math.min(cv.width / v.videoWidth, cv.height / v.videoHeight);
+  const ox = (cv.width - v.videoWidth*s) / 2, oy = (cv.height - v.videoHeight*s) / 2;
+  // 캔버스 픽셀 → 영상 좌표 → 0~1 정규화 (창 크기·확대와 무관하게 유지)
+  const vx = ((e.clientX - r.left) * (cv.width / r.width)  - ox) / s;
+  const vy = ((e.clientY - r.top)  * (cv.height / r.height) - oy) / s;
+  const nx = Math.min(1, Math.max(0, vx / v.videoWidth));
+  const ny = Math.min(1, Math.max(0, vy / v.videoHeight));
+
+  if (!drawPt){ drawPt = {x:nx, y:ny}; return; }
+  lines[p.key] = {x1:drawPt.x, y1:drawPt.y, x2:nx, y2:ny};
+  saveLines();
+  p.flow = newFlow(); p.trk = null;
+  p.tile.classList.add('lined');
+  p.tile.querySelector('[data-a="line"]').classList.add('lineon');
+  endDraw();
+}
+function clearLine(key){
+  const p = players.get(key);
+  delete lines[key]; saveLines();
+  if (p){
+    p.flow = newFlow(); p.trk = null;
+    p.tile.classList.remove('lined');
+    p.tile.querySelector('[data-a="line"]').classList.remove('lineon');
+  }
+}
+
+// 5분마다 구간 통과량을 기록한다 (누적이 아니라 구간 델타 = 표준 형식)
+async function recordFlows(){
+  const now = Date.now(), recs = [];
+  players.forEach((p, key) => {
+    if (!lines[key] || !p.flow) return;
+    const mins = (now - p.flow.lastAt) / 60000;
+    if (mins < 1) return;
+    const ab = p.flow.ab - p.flow.lastAB, ba = p.flow.ba - p.flow.lastBA;
+    recs.push({kind:'flow', key, name:tileName(p.cam), lat:p.cam.lat, lon:p.cam.lon, ts:now,
+               ab, ba, mins:+mins.toFixed(2), vph:Math.round((ab+ba)/mins*60),
+               car:0, bus:0, truck:0, motorcycle:0, person:0, veh:0});
+    p.flow.lastAB = p.flow.ab; p.flow.lastBA = p.flow.ba; p.flow.lastAt = now;
+  });
+  if (recs.length) await obsPut(recs).catch(()=>{});
+}
+
+// 한 타일 검지 → 상자 그리기 → 집계 반환
+async function detectTile(p){
+  const v = p.video;
+  if (!aiModel || !v.videoWidth) return null;
+  let preds;
+  try{ preds = await aiModel.detect(v, 20, 0.35); }
+  catch(e){ return null; }
+
+  const cv = p.tile.querySelector('.det');
+  const r  = p.tile.getBoundingClientRect();
+  if (cv.width !== Math.round(r.width) || cv.height !== Math.round(r.height)){
+    cv.width = Math.round(r.width); cv.height = Math.round(r.height);
+  }
+  const ctx = cv.getContext('2d');
+  ctx.clearRect(0, 0, cv.width, cv.height);
+
+  // object-fit:contain 으로 그려진 영역에 맞춰 좌표를 변환한다
+  const s  = Math.min(cv.width / v.videoWidth, cv.height / v.videoHeight);
+  const ox = (cv.width - v.videoWidth * s) / 2, oy = (cv.height - v.videoHeight * s) / 2;
+
+  const tally = {}, dets = [];
+  ctx.lineWidth = 2; ctx.font = '10px system-ui'; ctx.textBaseline = 'bottom';
+  preds.forEach(d => {
+    tally[d.class] = (tally[d.class] || 0) + 1;
+    const col = COLOR[d.class]; if (!col) return;
+    const [x,y,w,h] = d.bbox;
+    if (VEH.includes(d.class)) dets.push({cls:d.class, cx:x + w/2, cy:y + h/2, w, h});
+    ctx.strokeStyle = col;
+    ctx.strokeRect(ox + x*s, oy + y*s, w*s, h*s);
+    ctx.fillStyle = col;
+    ctx.fillText(`${d.class} ${(d.score*100)|0}`, ox + x*s + 1, oy + y*s - 2);
+  });
+
+  // 검지선이 있으면 추적해서 '통과'를 센다
+  if (lines[p.key]){
+    if (!p.flow) p.flow = newFlow();
+    trackUpdate(p, dets);
+    drawCountLine(ctx, p, s, ox, oy);
+    const f = p.flow, mins = (Date.now() - f.t0) / 60000;
+    const vph = mins > .3 ? Math.round((f.ab + f.ba) / mins * 60) : null;
+    p.tile.querySelector('.cnt.flow').textContent =
+      `➡${f.ab} ⬅${f.ba}` + (vph != null ? ` · ${vph}대/h` : '');
+  }
+
+  const veh = VEH.reduce((a,k) => a + (tally[k]||0), 0);
+  const ped = tally.person || 0;
+  p.tile.querySelector('.cnt.veh').textContent = `🚗 ${veh}`;
+  p.tile.querySelector('.cnt.ped').textContent = `🚶 ${ped}`;
+  p.lastTally = {...tally, veh, ped, at: Date.now()};
+  return p.lastTally;
+}
+
+function drawCountLine(ctx, p, s, ox, oy){
+  const L = lines[p.key], v = p.video;
+  const X = n => ox + n * v.videoWidth  * s;
+  const Y = n => oy + n * v.videoHeight * s;
+  const x1 = X(L.x1), y1 = Y(L.y1), x2 = X(L.x2), y2 = Y(L.y2);
+
+  ctx.save();
+  ctx.strokeStyle = '#ffd964'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  // 방향 화살표 (선의 법선 방향 = ➡ 로 세는 쪽)
+  const mx = (x1+x2)/2, my = (y1+y2)/2;
+  const dx = x2-x1, dy = y2-y1, len = Math.hypot(dx,dy) || 1;
+  const nx = -dy/len*16, ny = dx/len*16;
+  ctx.strokeStyle = '#ffd964'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(mx, my); ctx.lineTo(mx+nx, my+ny); ctx.stroke();
+  ctx.fillStyle = '#ffd964'; ctx.font = 'bold 11px system-ui'; ctx.textBaseline = 'middle';
+  ctx.fillText('➡', mx + nx*1.5 - 5, my + ny*1.5);
+  // 추적 중인 궤적
+  ctx.fillStyle = 'rgba(255,217,100,.9)';
+  (p.trk?.tracks || []).forEach(t => {
+    if (t.hits < 2) return;
+    ctx.beginPath(); ctx.arc(ox + t.cx*s, oy + t.cy*s, 3, 0, 7); ctx.fill();
+  });
+  ctx.restore();
+}
+
+// 화면에 떠 있는 타일들을 돌아가며 계속 검지
+let restIdx = 0;
+async function aiPump(){
+  if (aiPumping) return;
+  aiPumping = true;
+  while (aiOn){
+    if (scanning){ await sleep(300); continue; }   // 스캔 중에는 스캔 쪽이 검지를 맡는다
+    const list = [...players.values()].filter(p => p.video.videoWidth > 0);
+    if (!list.length){ await sleep(400); continue; }
+
+    const lined = list.filter(p => lines[p.key]);
+    const rest  = list.filter(p => !lines[p.key]);
+
+    if (lined.length){
+      // 추적은 프레임이 촘촘해야 하므로 검지선이 있는 타일을 최대 속도로 돌린다
+      for (const p of lined){ if (!aiOn) break; await detectTile(p); }
+      if (rest.length && aiOn) await detectTile(rest[restIdx++ % rest.length]);
+      await sleep(0);
+    } else {
+      for (const p of rest){
+        if (!aiOn) break;
+        await detectTile(p);
+        await sleep(Number(document.getElementById('aiGap').value) || 0);
+      }
+    }
+  }
+  aiPumping = false;
+}
+async function applyAI(){
+  aiOn = document.getElementById('aiOn').checked;
+  document.body.classList.toggle('ai', aiOn);
+  if (!aiOn){
+    setAiStat('');
+    players.forEach(p => {
+      const cv = p.tile.querySelector('.det');
+      cv.getContext('2d').clearRect(0, 0, cv.width, cv.height);
+    });
+    return;
+  }
+  await ensureModel();
+  if (aiModel) aiPump();
+}
+
+/* ---------------- 관측 기록 (IndexedDB) ---------------- */
+// IndexedDB 를 쓰되, 막힌 환경(일부 브라우저의 file://, 시크릿 모드)에서는
+// 메모리+localStorage 로 자동 폴백한다. 어느 쪽이든 CSV 로 꺼낼 수 있다.
+const DB_NAME = 'busan-cctv-obs', DB_STORE = 'obs', KEEP_DAYS = 14;
+const MEM_KEY = 'busan-cctv-obs-fallback', MEM_CAP = 20000;
+let store = null;
+
+async function getStore(){
+  if (store) return store;
+  try{
+    if (!window.indexedDB) throw new Error('no idb');
+    const d = await new Promise((ok, no) => {
+      const rq = indexedDB.open(DB_NAME, 1);
+      rq.onupgradeneeded = () => {
+        const s = rq.result.createObjectStore(DB_STORE, {keyPath:'id', autoIncrement:true});
+        s.createIndex('key', 'key'); s.createIndex('ts', 'ts');
+      };
+      rq.onsuccess = () => ok(rq.result);
+      rq.onerror   = () => no(rq.error || new Error('idb open'));
+      rq.onblocked = () => no(new Error('idb blocked'));
+      setTimeout(() => no(new Error('idb timeout')), 4000);
+    });
+    store = idbStore(d);
+  }catch(e){
+    store = memStore();
+  }
+  return store;
+}
+function idbStore(d){
+  return {
+    kind: 'IndexedDB',
+    put: recs => new Promise((ok, no) => {
+      if (!recs.length) return ok();
+      const tx = d.transaction(DB_STORE, 'readwrite'), st = tx.objectStore(DB_STORE);
+      recs.forEach(r => st.add(r));
+      tx.oncomplete = ok; tx.onerror = () => no(tx.error);
+    }),
+    all: () => new Promise((ok, no) => {
+      const rq = d.transaction(DB_STORE, 'readonly').objectStore(DB_STORE).getAll();
+      rq.onsuccess = () => ok(rq.result || []); rq.onerror = () => no(rq.error);
+    }),
+    clear: () => new Promise(ok => {
+      const tx = d.transaction(DB_STORE, 'readwrite');
+      tx.objectStore(DB_STORE).clear(); tx.oncomplete = ok;
+    }),
+    prune: () => new Promise(ok => {
+      const cut = Date.now() - KEEP_DAYS*86400000;
+      const tx = d.transaction(DB_STORE, 'readwrite');
+      tx.objectStore(DB_STORE).index('ts').openCursor(IDBKeyRange.upperBound(cut)).onsuccess = e => {
+        const c = e.target.result; if (c){ c.delete(); c.continue(); }
+      };
+      tx.oncomplete = ok;
+    })
+  };
+}
+function memStore(){
+  let arr = [];
+  try{ arr = JSON.parse(localStorage.getItem(MEM_KEY) || '[]'); }catch(e){}
+  const flush = () => { try{ localStorage.setItem(MEM_KEY, JSON.stringify(arr)); }catch(e){} };
+  return {
+    kind: '임시 저장(브라우저 제한)',
+    put: async recs => { arr.push(...recs); if (arr.length > MEM_CAP) arr = arr.slice(-MEM_CAP); flush(); },
+    all: async () => arr.slice(),
+    clear: async () => { arr = []; flush(); },
+    prune: async () => {
+      const cut = Date.now() - KEEP_DAYS*86400000;
+      arr = arr.filter(r => r.ts >= cut); flush();
+    }
+  };
+}
+const obsPut   = async r => (await getStore()).put(r);
+const obsAll   = async ()  => (await getStore()).all();
+const obsClear = async ()  => (await getStore()).clear();
+const obsPrune = async ()  => (await getStore()).prune();
+
+/* ---------------- 전역 스캔 ---------------- */
+let scanning = false, scanAbort = false, scanBackup = null;
+const SCAN_BATCH = 6, SCAN_SHOTS = 3, SCAN_WAIT = 9000;
+
+function scanPoolCams(){
+  const v = document.getElementById('scanPool').value;
+  return cams.filter(c => v === 'all' || (v === 'normal' ? c.kind === 'normal' : c.kind === 'smart'));
+}
+async function startScan(){
+  if (!await ensureModel()){ alert('AI 모델을 불러오지 못해 스캔할 수 없습니다.'); return; }
+  const pool = scanPoolCams();
+  if (!pool.length) return;
+
+  if (rotateOn){ document.getElementById('rotateOn').checked = false; stopRotate(); }
+  if (zoomKey) setZoom(players.get(zoomKey), false);
+
+  scanning = true; scanAbort = false;
+  scanBackup = [...selected];
+  document.getElementById('scanBtn').textContent = '■ 스캔 중지';
+  document.getElementById('scanBtn').classList.add('on');
+
+  const t0 = Date.now();
+  const batches = Math.ceil(pool.length / SCAN_BATCH);
+  let done = 0;
+
+  for (let b = 0; b < batches && !scanAbort; b++){
+    const batch = pool.slice(b*SCAN_BATCH, b*SCAN_BATCH + SCAN_BATCH);
+    selected = batch.map(c => c.key);
+    syncGrid();
+
+    // 영상이 뜰 때까지 기다린다 (최대 SCAN_WAIT)
+    const t1 = Date.now();
+    while (Date.now() - t1 < SCAN_WAIT && !scanAbort){
+      const ready = batch.filter(c => players.get(c.key)?.video.videoWidth > 0).length;
+      if (ready === batch.length) break;
+      await sleep(400);
+    }
+    if (scanAbort) break;
+    await sleep(600);
+
+    // 같은 지점을 여러 번 재서 최대값을 취한다 (한 프레임 실패에 흔들리지 않게)
+    const best = new Map();
+    for (let s = 0; s < SCAN_SHOTS && !scanAbort; s++){
+      for (const c of batch){
+        const p = players.get(c.key); if (!p) continue;
+        const t = await detectTile(p); if (!t) continue;
+        const cur = best.get(c.key);
+        if (!cur || t.veh > cur.veh) best.set(c.key, t);
+      }
+      await sleep(500);
+    }
+
+    const ts = Date.now();
+    const recs = [];
+    batch.forEach(c => {
+      const t = best.get(c.key);
+      done++;
+      if (!t) return;
+      recs.push({key:c.key, name:tileName(c), lat:c.lat, lon:c.lon, ts,
+                 car:t.car||0, bus:t.bus||0, truck:t.truck||0, motorcycle:t.motorcycle||0,
+                 person:t.ped||0, veh:t.veh||0});
+      latest.set(c.key, {veh:t.veh||0, ped:t.ped||0, ts});
+    });
+    await obsPut(recs).catch(()=>{});
+
+    const per = (Date.now() - t0) / Math.max(1, done);
+    const left = Math.round(per * (pool.length - done) / 1000);
+    document.getElementById('scanStat').textContent =
+      `${done}/${pool.length} 지점 · 남은 시간 ${Math.floor(left/60)}분 ${left%60}초`;
+    refreshMapStyles();
+  }
+
+  await obsPrune().catch(()=>{});
+  scanning = false;
+  document.getElementById('scanBtn').textContent = '🛰 전역 스캔';
+  document.getElementById('scanBtn').classList.remove('on');
+  document.getElementById('scanStat').textContent =
+    scanAbort ? `중지됨 · ${done}지점 기록` : `완료 · ${done}지점 · ${Math.round((Date.now()-t0)/1000)}초`;
+
+  selected = scanBackup || []; scanBackup = null;
+  syncGrid(); renderList(); applyAlerts();
+  if (aiOn) aiPump();
+}
+function stopScan(){ scanAbort = true; }
+
+const latest = new Map();   // key -> 최근 관측 {veh, ped, ts}
+
+/* ---------------- 통계 ---------------- */
+function statsAgg(recs){
+  const by = new Map();
+  recs.forEach(r => {
+    let a = by.get(r.key);
+    if (!a){ a = {key:r.key, name:r.name, lat:r.lat, lon:r.lon, n:0, sum:0, max:0, last:0, lastTs:0}; by.set(r.key, a); }
+    a.n++; a.sum += r.veh; a.max = Math.max(a.max, r.veh);
+    if (r.ts >= a.lastTs){ a.lastTs = r.ts; a.last = r.veh; }
+  });
+  by.forEach(a => { a.avg = a.sum / a.n; a.ratio = a.avg > 0 ? a.last / a.avg : 0; });
+  return [...by.values()];
+}
+async function showStats(){
+  document.getElementById('statsWrap').classList.add('on');
+  const body = document.getElementById('statsBody');
+  body.innerHTML = '<p style="color:var(--dim)">기록을 읽는 중…</p>';
+
+  let recs = [];
+  try{ recs = await obsAll(); }catch(e){}
+  if (!recs.length){
+    const st0 = await getStore();
+    document.getElementById('statsMeta').textContent = `저장: ${st0.kind}`;
+    body.innerHTML = `<p style="color:var(--dim);line-height:1.9">
+      아직 관측 기록이 없습니다.<br>
+      <b>🤖 AI 검지</b> 를 켜고 <b>🛰 전역 스캔</b> 을 누르면 지점별 교통량이 쌓이기 시작합니다.<br>
+      며칠 돌리면 시간대별 패턴과 이상 징후를 볼 수 있습니다.</p>`;
+    return;
+  }
+
+  const flows = recs.filter(r => r.kind === 'flow');
+  const dens  = recs.filter(r => r.kind !== 'flow');
+  const agg = statsAgg(dens);
+  const t0 = Math.min(...recs.map(r => r.ts)), t1 = Math.max(...recs.map(r => r.ts));
+  const fmt = t => new Date(t).toLocaleString('ko-KR', {hour12:false});
+  const st = await getStore();
+  document.getElementById('statsMeta').textContent =
+    `${recs.length.toLocaleString()}건 · ${agg.length}지점 · ${fmt(t0)} ~ ${fmt(t1)} · 저장: ${st.kind}`;
+
+  const hot  = [...agg].sort((a,b) => b.last - a.last).slice(0, 15);
+  // 이상: 관측이 3회 이상이고 평소 대비 30% 미만으로 급감 (사고·통제 가능성)
+  const odd  = agg.filter(a => a.n >= 3 && a.avg >= 4 && a.ratio < .3)
+                  .sort((a,b) => a.ratio - b.ratio).slice(0, 10);
+
+  // 유량(검지선 통과) 집계 — 지점 간 비교가 가능한 유일한 지표
+  const fby = new Map();
+  flows.forEach(r => {
+    let a = fby.get(r.key);
+    if (!a){ a = {key:r.key, name:r.name, ab:0, ba:0, mins:0}; fby.set(r.key, a); }
+    a.ab += r.ab; a.ba += r.ba; a.mins += r.mins;
+  });
+  const fagg = [...fby.values()].map(a => ({...a, vph: a.mins > 0 ? Math.round((a.ab+a.ba)/a.mins*60) : 0}))
+                                .sort((x,y) => y.vph - x.vph);
+
+  body.innerHTML = `
+    <div class="kpi">
+      <div><b>${recs.length.toLocaleString()}</b><span>관측 기록</span></div>
+      <div><b>${fagg.length}</b><span>검지선 지점</span></div>
+      <div><b>${agg.length}</b><span>밀도 관측 지점</span></div>
+      <div><b>${Math.round((t1-t0)/3600000*10)/10}h</b><span>누적 기간</span></div>
+    </div>
+
+    ${fagg.length ? `
+    <h3>통과 대수 (유량) — 검지선을 넘어간 차량. <span style="color:var(--dim);font-weight:400">지점 간 비교가 가능한 지표입니다.</span></h3>
+    <div class="tblWrap"><table class="st"><thead><tr><th>지점</th><th class="n">➡ 정방향</th><th class="n">⬅ 역방향</th><th class="n">합계</th><th class="n">관측(분)</th><th class="n">대/시</th></tr></thead>
+    <tbody>${fagg.map(a => `<tr data-key="${esc(a.key)}">
+      <td>${esc(a.name)}</td><td class="n">${a.ab}</td><td class="n">${a.ba}</td>
+      <td class="n">${a.ab+a.ba}</td><td class="n">${a.mins.toFixed(0)}</td><td class="n">${a.vph}</td></tr>`).join('')}</tbody></table></div>`
+    : `<h3>통과 대수 (유량)</h3>
+       <p style="color:var(--dim)">아직 검지선이 없습니다. 화면의 <b>📏</b> 를 눌러 차로를 가로지르는 선을 그으면
+       그 선을 넘는 차량을 세기 시작합니다. 5분마다 기록됩니다.</p>`}
+
+    <h3>화면 내 차량 수 (밀도) — <span style="color:var(--dim);font-weight:400">화각·줌이 지점마다 달라 <b>같은 지점의 시간 변화</b>만 의미가 있습니다.</span></h3>
+    <h3 style="margin-top:8px">지금 가장 혼잡한 지점</h3>
+    <div class="tblWrap"><table class="st"><thead><tr><th>지점</th><th class="n">최근</th><th class="n">평균</th><th class="n">최대</th><th class="n">관측</th></tr></thead>
+    <tbody>${hot.map(a => `<tr data-key="${esc(a.key)}" class="${a.ratio>1.8?'hot':''}">
+      <td>${esc(a.name)}</td><td class="n">${a.last}</td><td class="n">${a.avg.toFixed(1)}</td>
+      <td class="n">${a.max}</td><td class="n">${a.n}</td></tr>`).join('')}</tbody></table></div>
+
+    <h3>이상 징후 — 평소보다 통행이 크게 줄어든 지점</h3>
+    ${odd.length ? `<div class="tblWrap"><table class="st"><thead><tr><th>지점</th><th class="n">최근</th><th class="n">평소</th><th class="n">비율</th></tr></thead>
+    <tbody>${odd.map(a => `<tr data-key="${esc(a.key)}" class="warn">
+      <td>${esc(a.name)}</td><td class="n">${a.last}</td><td class="n">${a.avg.toFixed(1)}</td>
+      <td class="n">${Math.round(a.ratio*100)}%</td></tr>`).join('')}</tbody></table></div>
+    <p style="color:var(--dim);font-size:11px;margin-top:6px">
+      통행이 갑자기 줄면 상류 차단(사고·통제)일 수 있습니다. 야간·우천에도 줄어드니 함께 확인하세요.</p>`
+    : `<p style="color:var(--dim)">아직 이상 징후가 없습니다. (관측 3회 이상 쌓인 지점만 판정)</p>`}
+
+    <h3>지점별 시간 추이 <span style="color:var(--dim);font-weight:400">— 위 표에서 지점을 클릭하세요</span></h3>
+    <div id="chartWrap"><canvas id="chart"></canvas></div>`;
+
+  body._recs = recs;
+  if (hot[0]) drawChart(recs, hot[0].key, hot[0].name);
+}
+function drawChart(recs, key, name){
+  const cv = document.getElementById('chart'); if (!cv) return;
+  const w = cv.clientWidth || 800, h = 200;
+  cv.width = w * devicePixelRatio; cv.height = h * devicePixelRatio;
+  const ctx = cv.getContext('2d'); ctx.scale(devicePixelRatio, devicePixelRatio);
+  ctx.clearRect(0, 0, w, h);
+
+  const pts = recs.filter(r => r.key === key).sort((a,b) => a.ts - b.ts);
+  ctx.fillStyle = '#9aa4b2'; ctx.font = '12px system-ui';
+  if (pts.length < 2){ ctx.fillText(`${name} — 데이터가 부족합니다 (${pts.length}건)`, 8, 20); return; }
+
+  const pad = {l:34, r:10, t:22, b:22};
+  const x0 = pts[0].ts, x1 = pts[pts.length-1].ts;
+  const ymax = Math.max(4, ...pts.map(p => p.veh)) * 1.15;
+  const X = t => pad.l + (w - pad.l - pad.r) * (x1 === x0 ? .5 : (t - x0) / (x1 - x0));
+  const Y = v => h - pad.b - (h - pad.t - pad.b) * (v / ymax);
+
+  ctx.strokeStyle = '#2c313b'; ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++){
+    const v = ymax * i / 4, y = Y(v);
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(w - pad.r, y); ctx.stroke();
+    ctx.fillStyle = '#9aa4b2'; ctx.fillText(Math.round(v), 4, y + 4);
+  }
+  ctx.strokeStyle = '#7fe08a'; ctx.lineWidth = 2; ctx.beginPath();
+  pts.forEach((p, i) => i ? ctx.lineTo(X(p.ts), Y(p.veh)) : ctx.moveTo(X(p.ts), Y(p.veh)));
+  ctx.stroke();
+  ctx.fillStyle = '#7fe08a';
+  pts.forEach(p => ctx.fillRect(X(p.ts) - 1.5, Y(p.veh) - 1.5, 3, 3));
+
+  ctx.fillStyle = '#e8ebf0'; ctx.font = 'bold 12px system-ui';
+  ctx.fillText(`${name} — 차량 수 (${pts.length}건)`, pad.l, 14);
+  ctx.fillStyle = '#9aa4b2'; ctx.font = '11px system-ui';
+  const hm = t => new Date(t).toLocaleTimeString('ko-KR', {hour12:false, hour:'2-digit', minute:'2-digit'});
+  ctx.fillText(hm(x0), pad.l, h - 6);
+  ctx.textAlign = 'right'; ctx.fillText(hm(x1), w - pad.r, h - 6); ctx.textAlign = 'left';
+}
+async function exportCSV(){
+  let recs = [];
+  try{ recs = await obsAll(); }catch(e){}
+  if (!recs.length){ alert('내보낼 기록이 없습니다.'); return; }
+  const head = ['구분','지점ID','지점명','위도','경도','관측시각',
+                '승용차','버스','화물차','이륜차','보행자','화면내차량',
+                '통과_정방향','통과_역방향','관측분','시간당대수'];
+  const rows = recs.sort((a,b) => a.ts - b.ts).map(r => [
+    r.kind === 'flow' ? '유량' : '밀도',
+    r.key, `"${String(r.name).replace(/"/g,'""')}"`, r.lat, r.lon,
+    new Date(r.ts).toISOString(),
+    r.car ?? '', r.bus ?? '', r.truck ?? '', r.motorcycle ?? '', r.person ?? '', r.kind === 'flow' ? '' : r.veh,
+    r.kind === 'flow' ? r.ab : '', r.kind === 'flow' ? r.ba : '',
+    r.kind === 'flow' ? r.mins : '', r.kind === 'flow' ? r.vph : ''
+  ].join(','));
+  const csv = '﻿' + head.join(',') + '\n' + rows.join('\n');   // 엑셀 한글용 BOM
+  saveBlob(new Blob([csv], {type:'text/csv;charset=utf-8'}), `부산교통량_${stamp()}.csv`);
+}
+
+/* ---------------- UI ---------------- */
+const isMobile = () => matchMedia('(max-width:820px)').matches;
+
+function setSide(hidden){
+  const side = document.getElementById('side');
+  const on   = (hidden === undefined) ? !side.classList.contains('hidden') : !!hidden;
+  side.classList.toggle('hidden', on);
+  const btn = document.getElementById('toggleSide');
+  btn.textContent = on ? '▶ 목록' : '◀ 목록';
+  btn.title = (on ? '목록 패널 보기' : '목록 패널 숨기기') + ' (단축키: [ )';
+  // 모바일에서는 서랍이 본문을 덮으므로 뒤쪽을 어둡게 하고 탭하면 닫히게 한다
+  document.getElementById('sideVeil').classList.toggle('on', !on && isMobile());
+  if (hidden === undefined) save();
+}
+
+/* 이 기기에서 실제로 되는 기능인지 확인한다.
+   iOS 사파리는 hls.js 대신 네이티브 HLS 로 재생하는데, 그 영상은 캔버스로 읽을 수 없어
+   (cross-origin 오염) AI 검지·모션감지·녹화가 동작하지 않는다. 조용히 실패하지 않도록 미리 알린다. */
+let canRead = null;
+function probeCanvas(){
+  if (canRead !== null) return canRead;
+  const p = [...players.values()].find(x => x.video.videoWidth > 0);
+  if (!p) return null;                       // 아직 판단 불가
+  try{
+    const c = document.createElement('canvas');
+    c.width = c.height = 8;
+    const x = c.getContext('2d');
+    x.drawImage(p.video, 0, 0, 8, 8);
+    x.getImageData(0, 0, 8, 8);
+    canRead = true;
+  }catch(e){ canRead = false; }
+  return canRead;
+}
+function warnIfUnsupported(what){
+  if (probeCanvas() === false){
+    alert(`${what} 기능은 이 브라우저에서 쓸 수 없습니다.\n\n` +
+          `iPhone·iPad 사파리는 영상을 화면에 그리는 것만 허용하고 픽셀을 읽지 못하게 막습니다.\n` +
+          `영상 보기·녹화 외 기능(AI 검지, 모션 감지)은 PC 또는 안드로이드 크롬에서 사용하세요.`);
+    return true;
+  }
+  return false;
+}
+function applyCols(){
+  document.documentElement.style.setProperty('--cols', document.getElementById('cols').value);
+}
+function applyFit(){
+  document.getElementById('grid').classList.toggle('fit', document.getElementById('fit').checked);
+}
+
+document.querySelectorAll('.tabs button').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x === b));
+  tab = b.dataset.tab;
+  const q = document.getElementById('q');
+  q.placeholder = tab === 'normal' ? '장소·주소 검색 (예: 서면, 해운대)' : '교차로명·방향 검색 (예: 서면, 북)';
+  renderList(); save();
+}));
+
+document.getElementById('list').addEventListener('change', e => {
+  const row = e.target.closest('.cam'); if(!row) return;
+  toggle(row.dataset.key, e.target.checked);
+});
+document.getElementById('list').addEventListener('click', e => {
+  const add = e.target.dataset?.add;
+  if (add){
+    const s = sints.find(x => x.ixrId === add); if(!s) return;
+    const allOn = s.cameras.every(c => selected.includes(c.key));
+    s.cameras.forEach(c => toggle(c.key, !allOn, true));
+    commit();
+    return;
+  }
+  const evt = e.target.closest('.evt');
+  if (evt && evt.dataset.evt !== undefined){
+    const rows = document.getElementById('list')._rows || [];
+    const r = rows[Number(evt.dataset.evt)];
+    if (r && r.targets.length){
+      r.targets.forEach(c => { alerts.set(c.key, `${r.kind} · ${r.title}`); toggle(c.key, true, true); });
+      commit(); applyAlerts();
+    }
+  }
+});
+
+document.getElementById('q').addEventListener('input', renderList);
+document.getElementById('gu').addEventListener('change', renderList);
+document.getElementById('selPage').addEventListener('click', () => {
+  const vis = visibleCams();
+  if (vis.length > 24 && !confirm(`${vis.length}개를 한 번에 재생하면 매우 느려질 수 있습니다. 계속할까요?`)) return;
+  vis.forEach(c => toggle(c.key, true, true));
+  commit();
+});
+document.getElementById('clear').addEventListener('click', () => {
+  selected = []; autoKeys.clear(); alerts.clear();
+  renderList(); syncGrid(); save(); refreshMapStyles();
+});
+document.getElementById('cols').addEventListener('change', () => { applyCols(); save(); });
+document.getElementById('fit').addEventListener('change',  () => { applyFit();  save(); });
+document.getElementById('recScreen').addEventListener('click', toggleScreenRec);
+document.getElementById('reloadAll').addEventListener('click', () => players.forEach(p => start(p)));
+document.getElementById('toggleSide').addEventListener('click', () => setSide());
+document.getElementById('fsAll').addEventListener('click', () => {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen();
+});
+
+document.getElementById('autoTrack').addEventListener('change', e => {
+  if (e.target.checked) applyAutoTrack(); else clearAutoTrack();
+  save();
+});
+document.getElementById('motionOn').addEventListener('change', e => {
+  if (e.target.checked && warnIfUnsupported('모션 감지')){ e.target.checked = false; return; }
+  applyMotion(); save();
+});
+document.getElementById('motionRec').addEventListener('change', save);
+document.getElementById('motionSens').addEventListener('change', save);
+
+document.getElementById('rotateOn').addEventListener('change', e => {
+  if (e.target.checked) startRotate(); else stopRotate();
+});
+document.getElementById('rotateSec').addEventListener('change', () => {
+  if (rotateOn){ startRotate(); }
+  save();
+});
+
+document.getElementById('presetSave').addEventListener('click', () => {
+  const keys = rotateOn ? rotateBackup : selected;
+  if (!keys.length){ alert('저장할 화면이 없습니다. 먼저 CCTV를 선택하세요.'); return; }
+  const name = prompt('프리셋 이름을 입력하세요 (예: 출근길, 광안리)');
+  if (!name) return;
+  const o = loadPresets();
+  o[name.trim()] = {keys:[...keys], cols:document.getElementById('cols').value};
+  savePresets(o); renderPresets();
+  document.getElementById('presetSel').value = name.trim();
+});
+document.getElementById('presetSel').addEventListener('change', e => {
+  const p = loadPresets()[e.target.value];
+  if (!p) return;
+  if (rotateOn){ document.getElementById('rotateOn').checked = false; stopRotate(); }
+  autoKeys.clear();
+  selected = p.keys.filter(k => byKey.has(k));
+  if (p.cols){ document.getElementById('cols').value = p.cols; applyCols(); }
+  renderList(); syncGrid(); save(); refreshMapStyles();
+});
+document.getElementById('presetDel').addEventListener('click', () => {
+  const sel = document.getElementById('presetSel');
+  if (!sel.value){ alert('삭제할 프리셋을 먼저 고르세요.'); return; }
+  if (!confirm(`'${sel.value}' 프리셋을 삭제할까요?`)) return;
+  const o = loadPresets(); delete o[sel.value]; savePresets(o); renderPresets();
+});
+
+document.getElementById('toolsToggle').addEventListener('click', () =>
+  document.body.classList.toggle('tools'));
+document.getElementById('sideVeil').addEventListener('click', () => setSide(true));
+
+document.getElementById('aiOn').addEventListener('change', e => {
+  if (e.target.checked && warnIfUnsupported('AI 검지')){ e.target.checked = false; return; }
+  applyAI(); save();
+});
+document.getElementById('aiModel').addEventListener('change', async () => {
+  aiModel = null; if (document.getElementById('aiOn').checked) await applyAI();
+  save();
+});
+document.getElementById('aiGap').addEventListener('change', save);
+document.getElementById('scanPool').addEventListener('change', save);
+document.getElementById('scanBtn').addEventListener('click', () => scanning ? stopScan() : startScan());
+document.getElementById('statsBtn').addEventListener('click', showStats);
+document.getElementById('statsClose').addEventListener('click', () =>
+  document.getElementById('statsWrap').classList.remove('on'));
+document.getElementById('csvBtn').addEventListener('click', exportCSV);
+document.getElementById('dbClear').addEventListener('click', async () => {
+  if (!confirm('쌓인 관측 기록을 모두 지울까요? 되돌릴 수 없습니다.')) return;
+  await obsClear(); latest.clear(); refreshMapStyles(); showStats();
+});
+document.getElementById('statsBody').addEventListener('click', e => {
+  const tr = e.target.closest('tr[data-key]'); if (!tr) return;
+  const recs = document.getElementById('statsBody')._recs || [];
+  const r = recs.find(x => x.key === tr.dataset.key);
+  drawChart(recs, tr.dataset.key, r ? r.name : tr.dataset.key);
+  document.getElementById('chartWrap').scrollIntoView({behavior:'smooth', block:'nearest'});
+});
+
+document.getElementById('openMap').addEventListener('click', openMap);
+document.getElementById('mapClose').addEventListener('click', () =>
+  document.getElementById('mapWrap').classList.remove('on'));
+document.getElementById('mapNear').addEventListener('click', () => nearMe(4));
+document.getElementById('nearMe').addEventListener('click', () => nearMe(4));
+
+window.addEventListener('keydown', e => {
+  if (e.ctrlKey || e.altKey || e.metaKey) return;
+  const t = e.target.tagName;
+  if (t === 'INPUT' || t === 'SELECT' || t === 'TEXTAREA') return;
+  if (e.key === '['){ e.preventDefault(); setSide(); }
+  if (e.key === 'Escape'){
+    const mapOn = document.getElementById('mapWrap').classList.contains('on');
+    if (drawKey) endDraw();
+    else if (mapOn) document.getElementById('mapWrap').classList.remove('on');
+    else if (zoomKey) setZoom(players.get(zoomKey), false);
+  }
+});
+document.getElementById('zoomVeil').addEventListener('click', () => {
+  if (zoomKey) setZoom(players.get(zoomKey), false);
+});
+window.addEventListener('beforeunload', e => {
+  if (screenRec || [...players.values()].some(p => p.rec)){ e.preventDefault(); e.returnValue = ''; }
+});
+
+/* ---------------- 시작 ---------------- */
+(async () => {
+  const saved = restore();
+  document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
+  document.body.classList.add('ready');
+  renderPresets();
+
+  try{
+    const [n, s] = await Promise.all([loadNormal(), loadSmart()]);
+    cams  = n.concat(...s.map(x => x.cameras));
+    sints = s;
+    byKey = new Map(cams.map(c => [c.key, c]));
+  }catch(err){
+    document.getElementById('count').innerHTML =
+      `<span style="color:var(--danger)">목록을 불러오지 못했습니다: ${esc(err.message)}<br>
+       인터넷 연결 또는 its.busan.go.kr 상태를 확인하세요.</span>`;
+    return;
+  }
+
+  const gus = [...new Set(cams.map(c => c.gu).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ko'));
+  const sel = document.getElementById('gu');
+  gus.forEach(g => sel.insertAdjacentHTML('beforeend', `<option value="${esc(g)}">${esc(g)}</option>`));
+
+  selected = saved.filter(k => byKey.has(k));
+  renderList();
+  syncGrid();
+  applyMotion();
+
+  await loadLive();
+  setInterval(loadLive, 60000);        // 실시간 상황 1분마다 갱신
+  setInterval(recordFlows, 300000);    // 검지선 통과량 5분마다 기록
+})();
+</script>
+</body>
+</html>
