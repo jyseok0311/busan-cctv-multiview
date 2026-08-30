@@ -31,10 +31,10 @@ function IsBusan($row) {
 }
 
 # ---------- 주차장 ----------
-$pFile = Get-ChildItem $root -Filter '*.csv' | Where-Object { $_.Name -match '주차장' } | Select-Object -First 1
-if ($pFile) {
-  Write-Host "주차장 CSV: $($pFile.Name)"
-  $rows = Read-Csv914 $pFile.FullName
+$pFiles = @(Get-ChildItem $root -Filter "*.csv" -Recurse | Where-Object { $_.Name -match "주차장" -and $_.Name -notmatch "교통량" })
+if ($pFiles.Count) {
+  Write-Host "주차장 CSV $($pFiles.Count)개"
+  $rows = @(); foreach ($pf in $pFiles) { $rows += Read-Csv914 $pf.FullName }
   $list = @()
   foreach ($r in $rows) {
     if (-not (IsBusan $r)) { continue }

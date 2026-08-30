@@ -2586,7 +2586,10 @@ function missingDataMsg(what){
 }
 
 const PARK_FREE = '#5ee27a', PARK_PAID = '#9aa4b2';
-const CAM_COLOR = k => /주정차/.test(k) ? '#ffb454' : /신호/.test(k) ? '#ff8c42' : '#ff4d4f';
+// 원본의 '단속구분'은 코드값(3·4…)이고 공식 코드표를 확인하지 못했다.
+// 과속/신호/주정차를 임의로 단정하면 운전 중 오정보가 되므로, 확인된 제한속도만 쓴다.
+const CAM_COLOR = c => (c.s > 0 ? '#ff4d4f' : '#ffb454');
+const CAM_LABEL = c => (c.s > 0 ? `제한 ${c.s}km/h` : '단속카메라');
 
 async function toggleParkLayer(on){
   if (!on){ if (parkLayer){ map.removeLayer(parkLayer); parkLayer = null; } return; }
@@ -2637,9 +2640,9 @@ async function toggleCamLayer(on){
   enfLayer = L.layerGroup();
   enfData.forEach(c => {
     L.circleMarker([c.lat, c.lon], {
-      radius:5, weight:1, color:'#0b1220', fillColor:CAM_COLOR(c.k), fillOpacity:.92
+      radius:5, weight:1, color:'#0b1220', fillColor:CAM_COLOR(c), fillOpacity:.92
     })
-      .bindTooltip(`📷 ${c.k}${c.s ? ` ${c.s}km/h` : ''}`, {direction:'top'})
+      .bindTooltip(`📷 ${CAM_LABEL(c)} · ${esc(c.p || '')}`, {direction:'top'})
       .bindPopup(camPopup(c))
       .addTo(enfLayer);
   });
@@ -2648,10 +2651,11 @@ async function toggleCamLayer(on){
 }
 function camPopup(c){
   const near = nearestCams(c.lat, c.lon, 1)[0];
-  return `<div style="min-width:180px">
-    <b>📷 ${esc(c.k || '단속')}</b>${c.s ? ` <b style="color:#ff4d4f">${c.s}km/h</b>` : ''}<br>
-    <span style="color:#666">${esc(c.p || '')}</span>
-    ${c.z && c.z !== '해당없음' ? `<br><b style="color:#ffb454">${esc(c.z)}</b>` : ''}
+  return `<div style="min-width:190px">
+    <b>📷 무인교통단속카메라</b><br>
+    ${c.s > 0 ? `<b style="color:#ff4d4f">제한속도 ${c.s}km/h</b><br>` : ''}
+    <span style="color:#666">${esc(c.p || '')}${c.g ? ` · ${esc(c.g)}` : ''}</span><br>
+    <span style="color:#999;font-size:11px">단속 종류(과속·신호·주정차)는 원본이 코드값이라 표기하지 않았습니다</span>
     ${near ? `<br><a href="#" data-cam="${esc(near.c.key)}">▶ 가까운 CCTV 보기 (${Math.round(near.d)}m)</a>` : ''}
   </div>`;
 }
