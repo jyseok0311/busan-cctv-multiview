@@ -171,6 +171,12 @@
     border-radius:3px;padding:1px 6px;font-variant-numeric:tabular-nums;
   }
   .tile.pz .pzbadge{display:inline-flex}
+  /* 원본 픽셀보다 크게 늘린 구간 — 더 확대해도 정보가 늘지 않는다 */
+  .pzbadge.over{background:#ffb454}
+
+  /* 확대했을 때의 표현 방식. 확대된 타일에만 걸어 평소 렌더링과 성능은 그대로 둔다 */
+  body.img-pixel .tile.pz video{image-rendering:pixelated}
+  body.img-sharp .tile.pz video{filter:url(#sharpen)}
   .tile .cap{
     position:absolute;left:0;right:0;top:0;padding:5px 8px;
     background:linear-gradient(rgba(0,0,0,.78),transparent);
@@ -389,6 +395,15 @@
 </head>
 <body>
 
+<!-- 윤곽 강조용 언샤프 커널. 없는 정보를 만들지는 않고 경계 대비만 올린다. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <filter id="sharpen" x="0" y="0" width="100%" height="100%">
+    <feConvolveMatrix order="3" preserveAlpha="true" divisor="1"
+                      kernelMatrix="0 -0.6 0  -0.6 3.4 -0.6  0 -0.6 0"/>
+  </filter>
+</svg>
+
+
 <aside id="side" aria-label="CCTV 목록">
   <div id="sideHead">
     <h1>부산 실시간 CCTV 멀티뷰
@@ -434,6 +449,13 @@
       </select>
     </label>
     <label><input type="checkbox" id="fit"> 화면에 맞춤</label>
+    <label title="확대했을 때 화면을 어떻게 그릴지 — 원본에 없는 정보가 생기지는 않습니다">확대 표현
+      <select id="imgMode">
+        <option value="auto" selected>부드럽게</option>
+        <option value="pixel">선명하게(픽셀)</option>
+        <option value="sharp">윤곽 강조</option>
+      </select>
+    </label>
     <div class="sep"></div>
     <button class="btn" id="openMap">🗺 지도</button>
     <button class="btn" id="nearMe" title="현재 위치에서 가까운 CCTV 4곳">📍<span class="only-d"> 내 주변</span></button>
@@ -572,6 +594,7 @@ function save(){
       tab,
       cols: document.getElementById('cols').value,
       fit : document.getElementById('fit').checked,
+      imgMode: document.getElementById('imgMode').value,
       side: document.getElementById('side').classList.contains('hidden'),
       auto: document.getElementById('autoTrack').checked,
       mOn : document.getElementById('motionOn').checked,
@@ -599,6 +622,8 @@ function restore(){
   applyCols();
 
   if (s.fit){ document.getElementById('fit').checked = true; applyFit(); }
+  if (s.imgMode) document.getElementById('imgMode').value = s.imgMode;
+  applyImgMode();
   if (s.side) setSide(true);
   if (s.mSens) document.getElementById('motionSens').value = s.mSens;
   if (s.mRec)  document.getElementById('motionRec').checked = true;
@@ -1075,7 +1100,20 @@ function applyPZ(p){
   const on = s > 1.01;
   p.tile.classList.toggle('pz', on);
   const b = p.tile.querySelector('.pzbadge');
-  if (b) b.textContent = on ? s.toFixed(1) + '×' : '';
+  if (!b) return;
+  if (!on){ b.textContent = ''; b.classList.remove('over'); b.title = '원래 크기로'; return; }
+
+  b.textContent = s.toFixed(1) + '×';
+  // 원본 픽셀 하나가 화면 픽셀 몇 개로 늘어나는지. 1을 넘으면 더 키워도 정보가 늘지 않는다.
+  const vw = p.video.videoWidth, vh = p.video.videoHeight;
+  if (vw && vh){
+    const r = p.tile.getBoundingClientRect();
+    const ratio = Math.min(r.width / vw, r.height / vh) * s;
+    const over = ratio > 1.05;
+    b.classList.toggle('over', over);
+    b.title = `원본 ${vw}×${vh} · 원본 픽셀당 화면 ${ratio.toFixed(1)}픽셀`
+            + (over ? ' — 이 이상 확대해도 정보가 늘지 않습니다' : '') + ' (눌러서 원래 크기로)';
+  }
 }
 function clampPZ(p){
   const r = p.tile.getBoundingClientRect();
@@ -2370,6 +2408,11 @@ function warnIfUnsupported(what){
 function applyCols(){
   document.documentElement.style.setProperty('--cols', document.getElementById('cols').value);
 }
+function applyImgMode(){
+  const m = document.getElementById('imgMode').value;
+  document.body.classList.toggle('img-pixel', m === 'pixel');
+  document.body.classList.toggle('img-sharp', m === 'sharp');
+}
 function applyFit(){
   document.getElementById('grid').classList.toggle('fit', document.getElementById('fit').checked);
 }
@@ -2434,6 +2477,7 @@ document.getElementById('clear').addEventListener('click', () => {
 });
 document.getElementById('cols').addEventListener('change', () => { applyCols(); save(); });
 document.getElementById('fit').addEventListener('change',  () => { applyFit();  save(); });
+document.getElementById('imgMode').addEventListener('change', () => { applyImgMode(); save(); });
 document.getElementById('recScreen').addEventListener('click', toggleScreenRec);
 document.getElementById('reloadAll').addEventListener('click', () => players.forEach(p => start(p)));
 document.getElementById('toggleSide').addEventListener('click', () => setSide());
