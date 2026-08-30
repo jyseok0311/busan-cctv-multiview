@@ -12,7 +12,7 @@
   :root{
     --bg:#14161a; --panel:#1c1f26; --line:#2c313b; --fg:#e8ebf0;
     --dim:#9aa4b2; --accent:#4da3ff; --smart:#ffb454; --danger:#ff6b6b;
-    --rec:#ff4d4f; --motion:#5ee27a; --cols:3;
+    --rec:#ff4d4f; --motion:#5ee27a; --flood:#3aa0e8; --cols:3;
   }
   *{box-sizing:border-box}
   html,body{height:100%;margin:0}
@@ -41,18 +41,20 @@
   }
   #sideClose:hover{border-color:var(--accent)}
 
-  .tabs{display:flex;padding:0 14px;gap:5px}
+  .tabs{display:grid;grid-template-columns:1fr 1fr;padding:0 14px 9px;gap:5px}
   .tabs button{
-    flex:1;background:#12141a;color:var(--dim);border:1px solid var(--line);
-    border-bottom:none;border-radius:6px 6px 0 0;padding:8px 4px;font:inherit;font-size:12px;cursor:pointer;
+    background:#12141a;color:var(--dim);border:1px solid var(--line);
+    border-radius:6px;padding:8px 4px;font:inherit;font-size:12px;cursor:pointer;
   }
   .tabs button.on{background:var(--panel);color:var(--fg);font-weight:700;box-shadow:inset 0 2px 0 var(--accent)}
   .tabs button[data-tab="smart"].on{box-shadow:inset 0 2px 0 var(--smart)}
   .tabs button[data-tab="live"].on{box-shadow:inset 0 2px 0 var(--danger)}
+  .tabs button[data-tab="flood"].on{box-shadow:inset 0 2px 0 var(--flood)}
   .tabs button .dot{
     display:inline-block;min-width:16px;padding:0 4px;margin-left:3px;border-radius:8px;
     background:var(--danger);color:#fff;font-size:10px;font-weight:700;
   }
+  .tabs button .dot.wet{background:var(--flood)}
 
   .filters{padding:10px 14px; display:flex; flex-direction:column; gap:6px; border-top:1px solid var(--line)}
   .filters input,.filters select,.btn{
@@ -85,6 +87,24 @@
     display:inline-block;min-width:18px;text-align:center;font-size:10px;font-weight:700;
     background:#2c313b;color:var(--smart);border-radius:3px;padding:1px 4px;margin-right:5px;
   }
+
+  /* 침수 감시 지점 목록 */
+  .fl{display:flex;align-items:center;gap:8px;padding:10px 8px;border-bottom:1px solid var(--line);cursor:pointer}
+  .fl:hover{background:#232833}
+  .fl.wet{background:rgba(58,160,232,.10)}
+  .fl .st{
+    flex:0 0 auto;font-size:10px;font-weight:700;border-radius:3px;padding:2px 6px;
+    background:#2c313b;color:var(--dim);
+  }
+  .fl.wet .st{background:var(--flood);color:#fff}
+  .fl .nm{flex:1;min-width:0}
+  .fl .nm b{display:block;font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .fl .nm span{display:block;color:var(--dim);font-size:11px;margin-top:1px}
+  .fl.none{color:var(--dim);cursor:default;border:0;display:block;padding:14px 8px;line-height:1.6}
+  .fl.none:hover{background:none}
+  #floodFilters label{display:flex;align-items:center;gap:6px;color:var(--dim);font-size:12px}
+  #floodWet:disabled{opacity:.45;cursor:default}
+  #floodWet:disabled:hover{border-color:var(--line)}
 
   /* 실시간 상황 목록 */
   .evt{padding:9px 8px;border-radius:6px;cursor:pointer;border-bottom:1px solid var(--line)}
@@ -337,7 +357,7 @@
   }
   @media (max-width:420px){
     #side h1{font-size:14px;padding:12px 12px 8px}
-    .tabs button{font-size:11px;padding:7px 2px}
+    .tabs button{font-size:12px;padding:7px 4px}
   }
 
   /* 가로로 누운 휴대폰: 세로 공간이 거의 없으므로 막대를 납작하게 하고 타일을 넓게 */
@@ -367,6 +387,7 @@
     <button data-tab="normal" class="on">일반</button>
     <button data-tab="smart">스마트교차로</button>
     <button data-tab="live">실시간 상황<span class="dot" id="liveDot" style="display:none">0</span></button>
+    <button data-tab="flood">💧 침수<span class="dot wet" id="floodDot" style="display:none">0</span></button>
   </div>
 
   <div class="filters" id="camFilters">
@@ -376,6 +397,11 @@
       <button class="btn" id="selPage">보이는 항목 전체선택</button>
       <button class="btn" id="clear">선택 해제</button>
     </div>
+  </div>
+  <div class="filters" id="floodFilters" style="display:none">
+    <input id="floodQ" type="search" placeholder="지점명 검색 (예: 사상, 수영)">
+    <label><input type="checkbox" id="floodOnlyWet"> 침수 중인 곳만 보기</label>
+    <button class="btn" id="floodWet" disabled>침수 지점 CCTV 모두 띄우기</button>
   </div>
   <div id="count">불러오는 중…</div>
   <div id="list"></div>
@@ -488,6 +514,7 @@
       <i style="background:#4da3ff"></i>일반
       <i style="background:#ffb454"></i>스마트교차로
       <i style="background:#ff4d4f"></i>돌발상황
+      <i style="background:#3aa0e8"></i>침수
       <span style="margin-left:12px">관측 후 교통량:</span>
       <i style="background:#7fe08a"></i>한산 <i style="background:#ffd964"></i>보통
       <i style="background:#ff8c42"></i>많음 <i style="background:#ff4d4f"></i>혼잡
@@ -567,7 +594,7 @@ function restore(){
   if (s.scanPool) document.getElementById('scanPool').value = s.scanPool;
   if (s.mOn)  document.getElementById('motionOn').checked = true;
   if (s.auto) document.getElementById('autoTrack').checked = true;
-  if (s.tab === 'smart' || s.tab === 'live') tab = s.tab;
+  if (s.tab === 'smart' || s.tab === 'live' || s.tab === 'flood') tab = s.tab;
   return Array.isArray(s.selected) ? s.selected : [];
 }
 
@@ -667,7 +694,8 @@ function visibleCams(){
 
 function updateCount(n){
   const el = document.getElementById('count');
-  if (tab === 'live'){ el.textContent = liveSummary(); return; }
+  if (tab === 'live'){  el.textContent = liveSummary();  return; }
+  if (tab === 'flood'){ el.textContent = floodSummary(); return; }
   el.textContent = tab === 'normal'
     ? `${n}곳 표시 / 일반 CCTV ${cams.filter(c=>c.kind==='normal').length}곳 · 선택 ${selected.length}개`
     : `${n}대 표시 / 교차로 ${sints.length}곳·카메라 ${sints.reduce((a,s)=>a+s.cameras.length,0)}대 · 선택 ${selected.length}개`;
@@ -675,9 +703,11 @@ function updateCount(n){
 
 function renderList(){
   const box = document.getElementById('list');
-  document.getElementById('camFilters').style.display = tab === 'live' ? 'none' : '';
+  document.getElementById('camFilters').style.display   = (tab === 'live' || tab === 'flood') ? 'none' : '';
+  document.getElementById('floodFilters').style.display = tab === 'flood' ? '' : 'none';
 
-  if (tab === 'live'){ renderLive(); return; }
+  if (tab === 'live'){  renderLive();  return; }
+  if (tab === 'flood'){ renderFlood(); return; }
 
   const [q, gu] = filters();
   if (tab === 'normal'){
@@ -715,7 +745,7 @@ function rowHTML(c, sub){
 }
 
 /* ---------------- 실시간 상황 (돌발·정체·침수) ---------------- */
-let live = {inc:[], con:[], flood:[], at:0};
+let live = {inc:[], con:[], flood:[], floodAll:[], at:0};
 
 async function loadLive(){
   const [inc, con, flood] = await Promise.all([
@@ -726,14 +756,20 @@ async function loadLive(){
   live = {
     inc  : (inc||[]).filter(i => i.lat && i.lot),
     con  : (con||[]),
-    flood: (flood||[]).filter(f => f.floodingYn === 'Y'),
+    flood: (flood||[]).filter(f => f.floodingYn === 'Y'),   // 지금 침수 중인 곳
+    floodAll: (flood||[]),                                  // 침수 여부와 무관한 감시 지점 전체
     at   : Date.now()
   };
   const n = live.inc.length + live.con.length + live.flood.length;
   const dot = document.getElementById('liveDot');
   dot.style.display = n ? '' : 'none';
   dot.textContent = n;
-  if (tab === 'live') renderLive();
+  const fdot = document.getElementById('floodDot');
+  fdot.style.display = live.flood.length ? '' : 'none';
+  fdot.textContent = live.flood.length;
+  document.getElementById('floodWet').disabled = !live.flood.length;
+  if (tab === 'live')  renderLive();
+  if (tab === 'flood') renderFlood();
   if (document.getElementById('autoTrack').checked) applyAutoTrack();
   refreshMapIncidents();
 }
@@ -802,6 +838,70 @@ function renderLive(){
         : '가까운 CCTV 없음'}</div>
     </div>`).join('');
   box._rows = rows;
+}
+
+/* ---------------- 침수 감시 지점 ---------------- */
+const floodSummary = () => {
+  const all = live.floodAll.length, wet = live.flood.length;
+  if (!live.at) return '침수 정보를 불러오는 중…';
+  return (wet ? `침수 ${wet}곳` : '침수 없음') + ` · 감시 ${all}개 지점` +
+         ` · ${new Date(live.at).toLocaleTimeString('ko-KR',{hour12:false})} 기준`;
+};
+
+/* 침수 중인 곳을 위로 올리고 나머지는 이름순 */
+function floodRows(){
+  const q = document.getElementById('floodQ').value.trim().toLowerCase();
+  const onlyWet = document.getElementById('floodOnlyWet').checked;
+  return live.floodAll
+    .map(f => {
+      const wet  = f.floodingYn === 'Y';
+      const near = (f.lat && f.lot) ? nearestCams(+f.lat, +f.lot, 1)[0] : null;
+      return {f, wet, name: f.intNm || '이름 없는 지점', near};
+    })
+    .filter(r => (!onlyWet || r.wet) && (!q || r.name.toLowerCase().includes(q)))
+    .sort((a,b) => (b.wet - a.wet) || a.name.localeCompare(b.name,'ko'));
+}
+
+function renderFlood(){
+  updateCount();
+  const box = document.getElementById('list');
+  const rows = floodRows();
+
+  if (!rows.length){
+    box.innerHTML = `<div class="fl none">${
+      !live.at             ? '침수 정보를 불러오는 중…' :
+      live.floodAll.length ? '조건에 맞는 지점이 없습니다.'
+                           : '침수 감시 지점 정보를 받지 못했습니다.<br>잠시 뒤 다시 확인하세요. (1분마다 자동 갱신)'
+    }</div>`;
+    box._flood = [];
+    return;
+  }
+
+  box.innerHTML = rows.map((r, idx) => `
+    <div class="fl${r.wet ? ' wet' : ''}" data-flood="${idx}">
+      <span class="st">${r.wet ? '침수' : '정상'}</span>
+      <div class="nm">
+        <b>${esc(r.name)}</b>
+        <span>${r.near
+          ? '▶ ' + esc(tileName(r.near.c)) + ` (${Math.round(r.near.d)}m)`
+          : '가까운 CCTV 없음'}</span>
+      </div>
+    </div>`).join('');
+  box._flood = rows;
+}
+
+/* 침수 중인 지점의 가까운 CCTV 를 한 번에 띄운다 */
+function showWetCams(){
+  const keys = new Map();                       // key -> 배지 문구
+  live.flood.forEach(f => {
+    if (!f.lat || !f.lot) return;
+    nearestCams(+f.lat, +f.lot, 1).forEach(x =>
+      keys.set(x.c.key, `침수 감지 · ${f.intNm || ''}`.trim()));
+  });
+  if (!keys.size){ alert('띄울 수 있는 침수 지점 CCTV 가 없습니다.'); return; }
+  if (keys.size > 8 && !confirm(`${keys.size}개를 한 번에 재생하면 느려질 수 있습니다. 계속할까요?`)) return;
+  keys.forEach((txt, k) => { alerts.set(k, txt); toggle(k, true, true); });
+  commit(); applyAlerts(); renderFlood();
 }
 
 /* 돌발 자동추적: 상황 지점의 카메라를 자동으로 띄우고 배지를 붙인다 */
@@ -1443,6 +1543,16 @@ function refreshMapIncidents(){
       .on('click', () => {
         const n = nearestCams(+i.lat, +i.lot, 1)[0];
         if (n){ toggle(n.c.key, true); renderList(); }
+      })
+      .addTo(incLayer);
+  });
+  live.flood.forEach(f => {
+    if (!f.lat || !f.lot) return;
+    L.circleMarker([+f.lat, +f.lot], {radius:9, color:'#fff', weight:2, fillColor:'#3aa0e8', fillOpacity:.95})
+      .bindTooltip(`[침수] ${f.intNm || ''}`, {direction:'top'})
+      .on('click', () => {
+        const c = nearestCams(+f.lat, +f.lot, 1)[0];
+        if (c){ alerts.set(c.c.key, `침수 감지 · ${f.intNm || ''}`.trim()); toggle(c.c.key, true); applyAlerts(); renderList(); }
       })
       .addTo(incLayer);
   });
@@ -2148,6 +2258,17 @@ document.getElementById('list').addEventListener('click', e => {
     commit();
     return;
   }
+  const fl = e.target.closest('.fl');
+  if (fl && fl.dataset.flood !== undefined){
+    const r = (document.getElementById('list')._flood || [])[Number(fl.dataset.flood)];
+    if (!r) return;
+    if (!r.near){ alert(`'${r.name}' 근처에는 띄울 수 있는 CCTV 가 없습니다.`); return; }
+    if (r.wet) alerts.set(r.near.c.key, `침수 감지 · ${r.name}`);
+    toggle(r.near.c.key, true, true);
+    commit(); applyAlerts();
+    return;
+  }
+
   const evt = e.target.closest('.evt');
   if (evt && evt.dataset.evt !== undefined){
     const rows = document.getElementById('list')._rows || [];
@@ -2161,6 +2282,9 @@ document.getElementById('list').addEventListener('click', e => {
 
 document.getElementById('q').addEventListener('input', renderList);
 document.getElementById('gu').addEventListener('change', renderList);
+document.getElementById('floodQ').addEventListener('input', renderFlood);
+document.getElementById('floodOnlyWet').addEventListener('change', renderFlood);
+document.getElementById('floodWet').addEventListener('click', showWetCams);
 document.getElementById('selPage').addEventListener('click', () => {
   const vis = visibleCams();
   if (vis.length > 24 && !confirm(`${vis.length}개를 한 번에 재생하면 매우 느려질 수 있습니다. 계속할까요?`)) return;
