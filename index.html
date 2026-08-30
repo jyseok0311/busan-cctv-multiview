@@ -498,7 +498,7 @@
     <p><span class="only-d">왼쪽 목록</span><span class="only-m"><b>☰ 목록</b></span>에서 보고 싶은 CCTV를 <b>여러 개</b> 선택하세요. <b>🗺 지도</b> 에서 골라도 됩니다.</p>
     <p><b>스마트교차로</b> 탭의 <b>＋N방향</b> 은 한 교차로의 모든 진입로를 한 번에 띄웁니다.</p>
     <p><b>🚨 돌발 자동추적</b> 을 켜면 사고·공사·정체 지점의 CCTV가 저절로 올라옵니다.</p>
-    <p class="only-d">띄운 화면은 <b>끌어서</b> 자리를 옮기고, <b>더블클릭</b>(또는 ⛶)으로 크게 볼 수 있습니다. 작게는 Esc.</p>
+    <p class="only-d">띄운 화면은 <b>끌어서</b> 자리를 옮기고, <b>더블클릭</b>(또는 ⛶)으로 크게 볼 수 있습니다. 크게 본 상태에서 <b>마우스 휠</b>을 올리면 화면 안이 확대되고, 끌어서 이동합니다. 작게는 Esc.</p>
     <p class="only-m">띄운 화면은 <b>길게 눌러 끌어서</b> 자리를 옮기고, <b>두 번 톡톡</b>(또는 ⛶) 하면 크게 볼 수 있습니다.</p>
     <p class="only-m">화면 <b>왼쪽 가장자리에서 오른쪽으로 밀면</b> 목록이 열리고, 목록을 왼쪽으로 밀면 닫힙니다.</p>
     <p><small class="only-d">동시 재생 수가 많을수록 CPU·네트워크 사용량이 커집니다. 9~16개 이하를 권장합니다.</small>
@@ -1043,7 +1043,7 @@ function setZoom(p, on){
   }
 
   const btn = el.querySelector('.tools [data-a="full"]');
-  if (btn){ btn.textContent = on ? '⤡' : '⛶'; btn.title = on ? '작게 (Esc)' : '크게 보기'; }
+  if (btn){ btn.textContent = on ? '⤡' : '⛶'; btn.title = on ? '작게 (Esc) · 휠로 확대/축소' : '크게 보기'; }
 
   // FLIP
   const last = el.getBoundingClientRect();
@@ -1159,13 +1159,19 @@ function attachPinch(p){
   tile.addEventListener('pointerup', up);
   tile.addEventListener('pointercancel', up);
 
-  // 트랙패드 핀치와 Ctrl+휠은 ctrlKey 가 붙어서 들어온다
+  // 휠 확대.
+  // 크게 보기(⛶) 중에는 뒤 격자가 스크롤되지 않으므로 휠만으로 확대·축소한다.
+  // 평소에는 목록 스크롤을 방해하지 않도록 Ctrl+휠(=트랙패드 핀치)일 때만 받는다.
   tile.addEventListener('wheel', e => {
-    if (!e.ctrlKey || skip(e)) return;
+    if (skip(e)) return;
+    const enlarged = (zoomKey === p.key);
+    if (!enlarged && !e.ctrlKey) return;
     e.preventDefault();
     const r = tile.getBoundingClientRect();
+    // 픽셀/줄/페이지 단위가 브라우저마다 달라 부호만 쓴다
+    const step = enlarged && !e.ctrlKey ? 1.12 : 1.18;
     zoomAt(p, e.clientX - r.left, e.clientY - r.top,
-           p.pz.s * (e.deltaY < 0 ? 1.18 : 1 / 1.18));
+           p.pz.s * (e.deltaY < 0 ? step : 1 / step));
   }, {passive:false});
 
   // 배율 배지를 누르면 원래대로
