@@ -157,6 +157,20 @@
   .tile.alert{border-color:var(--danger);box-shadow:0 0 0 1px var(--danger) inset}
   #grid.fit .tile{aspect-ratio:auto;height:100%}
   .tile video{width:100%;height:100%;object-fit:contain;display:block;background:#000}
+
+  /* 두 손가락 확대(디지털 줌).
+     기본은 pan-y — 한 손가락으로는 목록이 세로로 스크롤되고, 두 손가락 확대만 우리가 처리한다.
+     확대된 뒤에는 none 으로 바꿔 한 손가락으로 영상 안을 이동한다. */
+  .tile{touch-action:pan-y}
+  .tile.pz{touch-action:none}
+  .tile video,.tile .det{transform-origin:0 0}
+  .tile.pz video,.tile.pz .det{will-change:transform}
+  .pzbadge{
+    display:none;align-items:center;flex:0 0 auto;font-style:normal;cursor:pointer;
+    font-size:11px;font-weight:700;color:#0b1220;background:#cfd6e0;
+    border-radius:3px;padding:1px 6px;font-variant-numeric:tabular-nums;
+  }
+  .tile.pz .pzbadge{display:inline-flex}
   .tile .cap{
     position:absolute;left:0;right:0;top:0;padding:5px 8px;
     background:linear-gradient(rgba(0,0,0,.78),transparent);
@@ -1007,6 +1021,7 @@ function setZoom(p, on){
   if (zoomKey && zoomKey !== p.key) setZoom(players.get(zoomKey), false);   // 하나만 확대
 
   const el = p.tile, grid = document.getElementById('grid'), veil = document.getElementById('zoomVeil');
+  resetPZ(p);              // 타일 크기가 바뀌므로 디지털 줌은 초기화한다
   const first = el.getBoundingClientRect();
 
   if (on){
@@ -1043,6 +1058,119 @@ function setZoom(p, on){
     el.style.transform  = '';
     clearTimeout(el._flip);
     el._flip = setTimeout(() => { el.style.transition = ''; el.style.transformOrigin = ''; }, 320);
+  });
+}
+
+/* ===== 타일 안 확대 (두 손가락 핀치 / 트랙패드 핀치 / 확대 중 한 손가락 이동) =====
+   영상 요소와 검지 오버레이에 같은 transform 을 걸어 둘이 항상 붙어 있게 한다.
+   좌표계는 타일 박스 기준, transform-origin 은 0 0 이라 계산이 단순하다. */
+const PZ_MAX = 8;
+
+function applyPZ(p){
+  const {s, tx, ty} = p.pz;
+  const t = `translate(${tx}px, ${ty}px) scale(${s})`;
+  p.video.style.transform = t;
+  const det = p.tile.querySelector('.det');
+  if (det) det.style.transform = t;
+  const on = s > 1.01;
+  p.tile.classList.toggle('pz', on);
+  const b = p.tile.querySelector('.pzbadge');
+  if (b) b.textContent = on ? s.toFixed(1) + '×' : '';
+}
+function clampPZ(p){
+  const r = p.tile.getBoundingClientRect();
+  if (p.pz.s <= 1){ p.pz.s = 1; p.pz.tx = 0; p.pz.ty = 0; return; }
+  // 확대된 그림이 타일을 항상 덮도록 이동 범위를 가둔다 (빈 여백이 보이지 않게)
+  p.pz.tx = Math.min(0, Math.max(r.width  * (1 - p.pz.s), p.pz.tx));
+  p.pz.ty = Math.min(0, Math.max(r.height * (1 - p.pz.s), p.pz.ty));
+}
+// 타일 좌표 (lx,ly) 아래의 그림이 제자리에 머물도록 배율만 바꾼다
+function zoomAt(p, lx, ly, ns){
+  ns = Math.min(PZ_MAX, Math.max(1, ns));
+  const cx = (lx - p.pz.tx) / p.pz.s, cy = (ly - p.pz.ty) / p.pz.s;
+  p.pz.s = ns;
+  p.pz.tx = lx - cx * ns;
+  p.pz.ty = ly - cy * ns;
+  clampPZ(p); applyPZ(p);
+}
+function resetPZ(p){
+  if (!p || !p.pz) return;
+  p.pz.s = 1; p.pz.tx = 0; p.pz.ty = 0;
+  applyPZ(p);
+}
+
+function attachPinch(p){
+  const tile = p.tile;
+  const pts = new Map();          // 눌려 있는 포인터들
+  let base = null, panLast = null;
+  const mid = a => ({x:(a[0].x + a[1].x) / 2, y:(a[0].y + a[1].y) / 2});
+  const gap = a => Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
+
+  const skip = e => e.target.closest('.cap') || e.target.closest('.tools') || drawKey === p.key;
+
+  tile.addEventListener('pointerdown', e => {
+    if (skip(e)) return;
+    pts.set(e.pointerId, {x:e.clientX, y:e.clientY});
+    try{ tile.setPointerCapture(e.pointerId); }catch(_){}
+    const list = [...pts.values()];
+    if (list.length === 2){
+      const r = tile.getBoundingClientRect(), m = mid(list);
+      base = {dist:gap(list) || 1, s:p.pz.s, tx:p.pz.tx, ty:p.pz.ty,
+              mx:m.x - r.left, my:m.y - r.top};
+      panLast = null;
+    } else if (list.length === 1 && p.pz.s > 1.01){
+      panLast = {x:e.clientX, y:e.clientY};
+    }
+  });
+
+  tile.addEventListener('pointermove', e => {
+    if (!pts.has(e.pointerId)) return;
+    pts.set(e.pointerId, {x:e.clientX, y:e.clientY});
+    const list = [...pts.values()];
+    const r = tile.getBoundingClientRect();
+
+    if (list.length >= 2 && base){
+      e.preventDefault();
+      const m = mid(list);
+      const ns = Math.min(PZ_MAX, Math.max(1, base.s * (gap(list) / base.dist)));
+      // 손가락을 벌리기 시작한 지점의 그림이 두 손가락 사이에 계속 머물게 한다
+      const cx = (base.mx - base.tx) / base.s, cy = (base.my - base.ty) / base.s;
+      p.pz.s = ns;
+      p.pz.tx = (m.x - r.left) - cx * ns;
+      p.pz.ty = (m.y - r.top)  - cy * ns;
+      clampPZ(p); applyPZ(p);
+    } else if (list.length === 1 && panLast && p.pz.s > 1.01){
+      e.preventDefault();
+      p.pz.tx += e.clientX - panLast.x;
+      p.pz.ty += e.clientY - panLast.y;
+      panLast = {x:e.clientX, y:e.clientY};
+      clampPZ(p); applyPZ(p);
+    }
+  });
+
+  const up = e => {
+    pts.delete(e.pointerId);
+    const list = [...pts.entries()];
+    if (list.length < 2) base = null;
+    // 두 손가락 중 하나만 뗐으면 남은 손가락으로 이동을 이어간다
+    panLast = (list.length === 1 && p.pz.s > 1.01)
+      ? {x:list[0][1].x, y:list[0][1].y} : null;
+  };
+  tile.addEventListener('pointerup', up);
+  tile.addEventListener('pointercancel', up);
+
+  // 트랙패드 핀치와 Ctrl+휠은 ctrlKey 가 붙어서 들어온다
+  tile.addEventListener('wheel', e => {
+    if (!e.ctrlKey || skip(e)) return;
+    e.preventDefault();
+    const r = tile.getBoundingClientRect();
+    zoomAt(p, e.clientX - r.left, e.clientY - r.top,
+           p.pz.s * (e.deltaY < 0 ? 1.18 : 1 / 1.18));
+  }, {passive:false});
+
+  // 배율 배지를 누르면 원래대로
+  tile.querySelector('.pzbadge').addEventListener('click', e => {
+    e.stopPropagation(); resetPZ(p);
   });
 }
 
@@ -1105,6 +1233,7 @@ function createTile(key){
       <i class="cnt veh">🚗 0</i>
       <i class="cnt ped">🚶 0</i>
       <i class="cnt flow"></i>
+      <i class="pzbadge" title="원래 크기로">1.0×</i>
       <i class="rectag"></i>
       <div class="tools">
         <button data-a="line"   title="검지선 긋기 / 지우기 — 선을 넘는 차량을 셉니다">📏</button>
@@ -1123,8 +1252,10 @@ function createTile(key){
   document.getElementById('grid').appendChild(tile);
   const p = { tile, video: tile.querySelector('video'), cam, key,
               hls:null, watchdog:null, lastTime:-1, stall:0, retry:0,
-              mPrev:null, mLevel:0, lastMotion:0 };
+              mPrev:null, mLevel:0, lastMotion:0,
+              pz:{s:1, tx:0, ty:0} };
   players.set(key, p);
+  attachPinch(p);
 
   const cap = tile.querySelector('.cap');
   cap.style.touchAction = 'none';                 // 끌 때 화면이 같이 스크롤되지 않도록
@@ -2436,6 +2567,7 @@ window.addEventListener('keydown', e => {
     else if (mapOn) document.getElementById('mapWrap').classList.remove('on');
     else if (zoomKey) setZoom(players.get(zoomKey), false);
     else if (isMobile() && !sideHidden()){ setSide(true); save(); }
+    else players.forEach(resetPZ);       // 마지막으로 디지털 줌 되돌리기
   }
 });
 document.getElementById('zoomVeil').addEventListener('click', () => {
