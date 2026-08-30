@@ -1,2 +1,5 @@
 # 로컬 원본 파일 (index.html 과 동일 내용)
 부산CCTV_멀티뷰.html
+
+# data.go.kr 원본 CSV (변환 결과인 data/*.json 만 커밋)
+*.csv

@@ -571,6 +571,9 @@
     </span>
     <div class="spacer"></div>
     <span id="mapCount" style="color:var(--dim);font-size:12px"></span>
+    <label title="주차장 위치와 요금 (data.go.kr 표준데이터)"><input type="checkbox" id="layerPark"> 🅿️ 주차장</label>
+    <label title="무료 주차장만 표시"><input type="checkbox" id="parkFreeOnly"> 무료만</label>
+    <label title="과속·신호·주정차 단속카메라 (경찰청 공개데이터)"><input type="checkbox" id="layerCam"> 📷 단속</label>
     <button class="btn" id="routeDraw" title="지도를 클릭해 경로를 그으면 주변 CCTV가 선택됩니다">✏ 경로 그리기</button>
     <label style="color:var(--dim);font-size:12px">반경
       <select id="routeBuf">
@@ -2561,6 +2564,113 @@ function clearRoute(){
   document.getElementById('mapCount').textContent = `선택 ${selected.length}개`;
 }
 
+/* ================= 주차장 · 단속카메라 레이어 =================
+   data.go.kr 표준데이터를 부산만 걸러 data/*.json 으로 넣어두면 키 없이 동작한다.
+   위치·요금은 거의 바뀌지 않는 자료라 정적으로 두는 편이 빠르고 안정적이다. */
+let parkData = null, enfData = null;
+let parkLayer = null, enfLayer = null;
+
+async function loadStatic(name){
+  try{
+    const r = await fetch(`data/${name}.json`, {cache:'no-store'});
+    if (!r.ok) return null;
+    const j = await r.json();
+    return Array.isArray(j) ? j : null;
+  }catch(e){ return null; }
+}
+function missingDataMsg(what){
+  alert(`${what} 데이터 파일이 아직 없습니다.\n\n`
+      + `data.go.kr 에서 CSV 를 내려받아 프로젝트 폴더에 넣고\n`
+      + `'데이터변환.ps1' 을 실행하면 data 폴더에 만들어집니다.\n\n`
+      + `자세한 순서는 README 를 봐주세요.`);
+}
+
+const PARK_FREE = '#5ee27a', PARK_PAID = '#9aa4b2';
+const CAM_COLOR = k => /주정차/.test(k) ? '#ffb454' : /신호/.test(k) ? '#ff8c42' : '#ff4d4f';
+
+async function toggleParkLayer(on){
+  if (!on){ if (parkLayer){ map.removeLayer(parkLayer); parkLayer = null; } return; }
+  if (!parkData){
+    parkData = await loadStatic('parking');
+    if (!parkData){ missingDataMsg('주차장'); document.getElementById('layerPark').checked = false; return; }
+  }
+  drawParkLayer();
+}
+function drawParkLayer(){
+  if (parkLayer) map.removeLayer(parkLayer);
+  if (!parkData || !document.getElementById('layerPark').checked) return;
+  const freeOnly = document.getElementById('parkFreeOnly').checked;
+  const rows = parkData.filter(p => !freeOnly || p.free);
+  parkLayer = L.layerGroup();
+  rows.forEach(p => {
+    L.circleMarker([p.lat, p.lon], {
+      radius:5, weight:1, color:'#0b1220',
+      fillColor: p.free ? PARK_FREE : PARK_PAID, fillOpacity:.92
+    })
+      .bindTooltip(`🅿️ ${p.n}${p.free ? ' (무료)' : ''}`, {direction:'top'})
+      .bindPopup(parkPopup(p))
+      .addTo(parkLayer);
+  });
+  parkLayer.addTo(map);
+  document.getElementById('mapCount').textContent =
+    `주차장 ${rows.length}곳${freeOnly ? ' (무료만)' : ''} · 선택 ${selected.length}개`;
+}
+function parkPopup(p){
+  const near = nearestCams(p.lat, p.lon, 1)[0];
+  const fee = p.free ? '<b style="color:#5ee27a">무료</b>'
+            : `${esc(p.f || '유료')}${p.bf ? ` · 기본 ${esc(p.bt)}분 ${esc(p.bf)}원` : ''}`;
+  return `<div style="min-width:190px">
+    <b>${esc(p.n)}</b><br>
+    <span style="color:#666">${esc(p.a || '')}</span><br>
+    ${fee}${p.c ? ` · ${p.c}면` : ''}<br>
+    <span style="color:#666">${esc(p.o || '')}</span>
+    ${near ? `<br><a href="#" data-cam="${esc(near.c.key)}">▶ 가까운 CCTV 보기 (${Math.round(near.d)}m)</a>` : ''}
+  </div>`;
+}
+
+async function toggleCamLayer(on){
+  if (!on){ if (enfLayer){ map.removeLayer(enfLayer); enfLayer = null; } return; }
+  if (!enfData){
+    enfData = await loadStatic('cameras');
+    if (!enfData){ missingDataMsg('단속카메라'); document.getElementById('layerCam').checked = false; return; }
+  }
+  enfLayer = L.layerGroup();
+  enfData.forEach(c => {
+    L.circleMarker([c.lat, c.lon], {
+      radius:5, weight:1, color:'#0b1220', fillColor:CAM_COLOR(c.k), fillOpacity:.92
+    })
+      .bindTooltip(`📷 ${c.k}${c.s ? ` ${c.s}km/h` : ''}`, {direction:'top'})
+      .bindPopup(camPopup(c))
+      .addTo(enfLayer);
+  });
+  enfLayer.addTo(map);
+  document.getElementById('mapCount').textContent = `단속카메라 ${enfData.length}개 · 선택 ${selected.length}개`;
+}
+function camPopup(c){
+  const near = nearestCams(c.lat, c.lon, 1)[0];
+  return `<div style="min-width:180px">
+    <b>📷 ${esc(c.k || '단속')}</b>${c.s ? ` <b style="color:#ff4d4f">${c.s}km/h</b>` : ''}<br>
+    <span style="color:#666">${esc(c.p || '')}</span>
+    ${c.z && c.z !== '해당없음' ? `<br><b style="color:#ffb454">${esc(c.z)}</b>` : ''}
+    ${near ? `<br><a href="#" data-cam="${esc(near.c.key)}">▶ 가까운 CCTV 보기 (${Math.round(near.d)}m)</a>` : ''}
+  </div>`;
+}
+
+// 경로를 그었을 때 주변 주차장·단속카메라도 함께 알려준다
+function routeExtras(buf){
+  const bits = [];
+  if (parkData){
+    const f = parkData.filter(p => p.free && distToRoute(p.lat, p.lon) <= buf).length;
+    const a = parkData.filter(p => distToRoute(p.lat, p.lon) <= buf).length;
+    if (a) bits.push(`주차장 ${a}곳(무료 ${f})`);
+  }
+  if (enfData){
+    const n = enfData.filter(c => distToRoute(c.lat, c.lon) <= buf).length;
+    if (n) bits.push(`단속카메라 ${n}개`);
+  }
+  return bits.join(' · ');
+}
+
 /* ---------------- UI ---------------- */
 /* CSS 의 모바일 분기와 조건이 같아야 한다. 가로로 누운 휴대폰도 모바일로 친다 */
 const isMobile = () => matchMedia('(max-width:820px), (max-height:480px) and (pointer:coarse)').matches;
@@ -2819,6 +2929,17 @@ document.getElementById('nearMe').addEventListener('click', () => nearMe(4));
 document.getElementById('shareLink').addEventListener('click', copyShareLink);
 document.getElementById('routeDraw').addEventListener('click', () => setRouteMode(!routeMode));
 document.getElementById('routeClear').addEventListener('click', clearRoute);
+document.getElementById('layerPark').addEventListener('change', e => toggleParkLayer(e.target.checked));
+document.getElementById('parkFreeOnly').addEventListener('change', drawParkLayer);
+document.getElementById('layerCam').addEventListener('change', e => toggleCamLayer(e.target.checked));
+// 팝업 안의 '가까운 CCTV 보기'
+document.getElementById('map').addEventListener('click', e => {
+  const a = e.target.closest('a[data-cam]');
+  if (!a) return;
+  e.preventDefault();
+  toggle(a.dataset.cam, true);
+  renderList();
+});
 document.getElementById('routeBuf').addEventListener('change', () => { drawRoute(); });
 document.getElementById('notifyOn').addEventListener('change', async e => {
   const ok = await enableNotify(e.target.checked);
