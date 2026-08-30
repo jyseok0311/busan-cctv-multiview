@@ -167,8 +167,10 @@
   /* 두 손가락 확대(디지털 줌).
      기본은 pan-y — 한 손가락으로는 목록이 세로로 스크롤되고, 두 손가락 확대만 우리가 처리한다.
      확대된 뒤에는 none 으로 바꿔 한 손가락으로 영상 안을 이동한다. */
-  .tile{touch-action:pan-y}
-  .tile.pz{touch-action:none}
+  /* touch-action 은 상속되지 않는다. 손가락이 실제로 닿는 video/canvas 에도 반드시 걸어야
+     브라우저가 페이지 전체 확대를 가져가지 않는다. */
+  .tile,.tile video,.tile .det{touch-action:pan-y}
+  .tile.pz,.tile.pz video,.tile.pz .det{touch-action:none}
   .tile video,.tile .det{transform-origin:0 0}
   .tile.pz video,.tile.pz .det{will-change:transform}
   .pzbadge{
@@ -1171,7 +1173,8 @@ function attachPinch(p){
   const mid = a => ({x:(a[0].x + a[1].x) / 2, y:(a[0].y + a[1].y) / 2});
   const gap = a => Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
 
-  const skip = e => e.target.closest('.cap') || e.target.closest('.tools') || drawKey === p.key;
+  // 버튼과 검지선 그리기만 제외한다. 제목줄에서 시작해도 핀치가 되도록.
+  const skip = e => e.target.closest('.tools') || drawKey === p.key;
 
   tile.addEventListener('pointerdown', e => {
     if (skip(e)) return;
@@ -1179,6 +1182,7 @@ function attachPinch(p){
     try{ tile.setPointerCapture(e.pointerId); }catch(_){}
     const list = [...pts.values()];
     if (list.length === 2){
+      cancelDrag();                 // 두 손가락이면 자리이동이 아니라 확대다
       const r = tile.getBoundingClientRect(), m = mid(list);
       base = {dist:gap(list) || 1, s:p.pz.s, tx:p.pz.tx, ty:p.pz.ty,
               mx:m.x - r.left, my:m.y - r.top};
@@ -1224,6 +1228,16 @@ function attachPinch(p){
   tile.addEventListener('pointerup', up);
   tile.addEventListener('pointercancel', up);
 
+  // iOS 사파리는 touch-action 만으로 페이지 확대를 막지 못한다.
+  // 두 손가락이 타일 위에 있을 때는 브라우저 기본 확대를 직접 막아 우리 핀치가 살아나게 한다.
+  tile.addEventListener('touchmove', e => {
+    if (drawKey === p.key) return;
+    if (e.touches.length >= 2 || (p.pz.s > 1.01 && e.touches.length === 1)) e.preventDefault();
+  }, {passive:false});
+  // 사파리 전용 제스처 이벤트 (touch-action 을 무시하고 페이지를 확대시킨다)
+  ['gesturestart','gesturechange','gestureend'].forEach(t =>
+    tile.addEventListener(t, e => { if (drawKey !== p.key) e.preventDefault(); }, {passive:false}));
+
   // 휠 확대.
   // 크게 보기(⛶) 중에는 뒤 격자가 스크롤되지 않으므로 휠만으로 확대·축소한다.
   // 평소에는 목록 스크롤을 방해하지 않도록 Ctrl+휠(=트랙패드 핀치)일 때만 받는다.
@@ -1249,6 +1263,13 @@ function attachPinch(p){
    HTML5 드래그앤드롭은 터치에서 전혀 발생하지 않으므로 포인터 이벤트로 직접 구현한다.
    마우스·터치·펜이 같은 코드로 동작한다. */
 let dragKey = null, dragFrom = null;
+// 진행 중인 자리이동을 없던 일로 되돌린다 (핀치가 시작될 때)
+function cancelDrag(){
+  if (!dragKey) return;
+  dragKey = null; dragFrom = null;
+  document.querySelectorAll('.tile.dragging,.tile.dropzone')
+    .forEach(t => t.classList.remove('dragging', 'dropzone'));
+}
 function onDragDown(e, p){
   if (e.target.closest('.tools')) return;
   if (e.pointerType === 'mouse' && e.button !== 0) return;
