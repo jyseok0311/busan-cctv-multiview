@@ -481,6 +481,12 @@
     <label title="사고·공사·정체 지점의 CCTV를 자동으로 띄웁니다">
       <input type="checkbox" id="autoTrack"> 🚨 돌발 자동추적
     </label>
+    <label title="보고 있는 CCTV 지점의 기상청 실황·6시간 예보 (인증키 필요)">
+      <input type="checkbox" id="wxOn"> 🌦 날씨
+    </label>
+    <button class="btn" id="wxKey" title="기상청 단기예보 인증키 입력 — 이 브라우저에만 저장됩니다">🔑</button>
+    <span id="wxNow" style="color:var(--dim);font-size:12px"></span>
+    <div class="sep"></div>
     <label title="창을 닫아두어도 사고·침수를 알림으로 알려줍니다">
       <input type="checkbox" id="notifyOn"> 🔔 알림
     </label>
@@ -623,6 +629,7 @@ function save(){
       fit : document.getElementById('fit').checked,
       imgMode: document.getElementById('imgMode').value,
       notify: document.getElementById('notifyOn').checked,
+      wx: document.getElementById('wxOn').checked,
       side: document.getElementById('side').classList.contains('hidden'),
       auto: document.getElementById('autoTrack').checked,
       mOn : document.getElementById('motionOn').checked,
@@ -662,6 +669,7 @@ function restore(){
   if (s.mOn)  document.getElementById('motionOn').checked = true;
   if (s.auto) document.getElementById('autoTrack').checked = true;
   if (s.notify) document.getElementById('notifyOn').checked = true;
+  if (s.wx) document.getElementById('wxOn').checked = true;
   // 이미 허용해 둔 경우엔 다시 묻지 않고 바로 켠다
   if (s.notify && 'Notification' in window && Notification.permission === 'granted') notifyReady = true;
   if (s.tab === 'smart' || s.tab === 'live' || s.tab === 'flood') tab = s.tab;
@@ -842,6 +850,7 @@ async function loadLive(){
   if (tab === 'flood') renderFlood();
   if (document.getElementById('autoTrack').checked) applyAutoTrack();
   checkNotify();
+  if (document.getElementById('wxOn').checked) { loadWx().then(renderWxBadge).catch(()=>{}); }
   refreshMapIncidents();
 }
 
@@ -896,10 +905,10 @@ function renderLive(){
 
   const box = document.getElementById('list');
   if (!rows.length){
-    box.innerHTML = `<div class="evt none">진행 중인 돌발상황·정체구간이 없습니다.</div>`;
+    box.innerHTML = wxBlockHTML() + `<div class="evt none">진행 중인 돌발상황·정체구간이 없습니다.</div>`;
     return;
   }
-  box.innerHTML = rows.map((r, idx) => `
+  box.innerHTML = wxBlockHTML() + rows.map((r, idx) => `
     <div class="evt" data-evt="${idx}">
       <div class="top"><span class="kind ${r.cls}">${esc(r.kind)}</span>
         <b>${esc(r.title)}</b><time>${esc(r.time)}</time></div>
@@ -2675,6 +2684,155 @@ function routeExtras(buf){
   return bits.join(' · ');
 }
 
+/* ================= 기상청 단기예보 =================
+   보고 있는 CCTV 지점의 실황과 6시간 강수 전망.
+   인증키는 이 브라우저(localStorage)에만 두고 저장소에는 넣지 않는다 — 공개 저장소이므로. */
+const KMA_BASE = 'https://apis.data.go.kr/1360000/VilageFcstInfoService_2.0';
+const KMA_KEY_LS = 'kma-service-key';
+let wx = null, wxAt = 0, wxBusy = false;
+
+const kmaKey = () => { try{ return localStorage.getItem(KMA_KEY_LS) || ''; }catch(e){ return ''; } };
+
+// 위경도 → 기상청 격자(DFS). 공식 격자표 부산 223개 행정동으로 검증(220건 일치, 3건은 경계에서 1칸 차이).
+function dfsXY(lat, lon){
+  const RE=6371.00877, GRID=5.0, SLAT1=30.0, SLAT2=60.0, OLON=126.0, OLAT=38.0, XO=43, YO=136;
+  const D = Math.PI/180, re = RE/GRID, sl1 = SLAT1*D, sl2 = SLAT2*D, ol = OLON*D, oa = OLAT*D;
+  let sn = Math.tan(Math.PI*0.25 + sl2*0.5) / Math.tan(Math.PI*0.25 + sl1*0.5);
+  sn = Math.log(Math.cos(sl1)/Math.cos(sl2)) / Math.log(sn);
+  let sf = Math.tan(Math.PI*0.25 + sl1*0.5);
+  sf = Math.pow(sf, sn) * Math.cos(sl1) / sn;
+  let ro = Math.tan(Math.PI*0.25 + oa*0.5);
+  ro = re*sf / Math.pow(ro, sn);
+  let ra = Math.tan(Math.PI*0.25 + lat*D*0.5);
+  ra = re*sf / Math.pow(ra, sn);
+  let theta = lon*D - ol;
+  if (theta > Math.PI) theta -= 2*Math.PI;
+  if (theta < -Math.PI) theta += 2*Math.PI;
+  theta *= sn;
+  return {nx: Math.floor(ra*Math.sin(theta) + XO + 0.5),
+          ny: Math.floor(ro - ra*Math.cos(theta) + YO + 0.5)};
+}
+// 브라우저 시간대와 무관하게 한국시각으로 발표시각을 계산한다
+function kst(offsetMin = 0){
+  const d = new Date(Date.now() + d0() - offsetMin*60000);
+  const p = n => String(n).padStart(2,'0');
+  return {ymd:`${d.getUTCFullYear()}${p(d.getUTCMonth()+1)}${p(d.getUTCDate())}`,
+          hh:p(d.getUTCHours()), mm:p(d.getUTCMinutes())};
+}
+const d0 = () => 9*3600000;   // KST = UTC+9
+
+const PTY = {'0':'','1':'비','2':'비/눈','3':'눈','5':'빗방울','6':'진눈깨비','7':'날린눈'};
+const SKY = {'1':'맑음','3':'구름많음','4':'흐림'};
+
+async function kmaCall(op, params){
+  const key = kmaKey();
+  if (!key) throw new Error('NOKEY');
+  const q = new URLSearchParams({dataType:'JSON', numOfRows:'100', pageNo:'1', ...params});
+  // 인증키는 이미 URL 인코딩된 형태라 다시 인코딩하지 않는다
+  const url = `${KMA_BASE}/${op}?serviceKey=${key}&${q}`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const j = await r.json();
+  const h = j?.response?.header;
+  if (h?.resultCode !== '00') throw new Error(h?.resultMsg || '응답 오류');
+  return j.response.body.items.item || [];
+}
+
+async function loadWx(force){
+  if (wxBusy) return wx;
+  if (!force && wx && Date.now() - wxAt < 600000) return wx;   // 10분 캐시
+  const ref = selected.map(k => byKey.get(k)).find(c => c && c.lat)
+           || {lat:35.1798, lon:129.0750, name:'부산 중심'};    // 띄운 화면이 없으면 부산시청 부근
+  const g = dfsXY(ref.lat, ref.lon);
+  wxBusy = true;
+  try{
+    // 실황은 매시 40분, 초단기예보는 매시 45분 이후 제공된다
+    const a = kst(40), b = kst(45);
+    const [ncst, fcst] = await Promise.all([
+      kmaCall('getUltraSrtNcst', {base_date:a.ymd, base_time:a.hh + '00', nx:g.nx, ny:g.ny}),
+      kmaCall('getUltraSrtFcst', {base_date:b.ymd, base_time:b.hh + '30', nx:g.nx, ny:g.ny})
+    ]);
+    const now = {};
+    ncst.forEach(i => now[i.category] = i.obsrValue);
+    const byTime = new Map();
+    fcst.forEach(i => {
+      // 자정을 넘어가는 예보가 섞이므로 날짜까지 함께 키로 쓴다 (23시가 04시 뒤로 밀리지 않도록)
+      const k = i.fcstDate + i.fcstTime;
+      if (!byTime.has(k)) byTime.set(k, {k, d:i.fcstDate, t:i.fcstTime});
+      byTime.get(k)[i.category] = i.fcstValue;
+    });
+    wx = {ref, g, now, fcst:[...byTime.values()].sort((x,y) => x.k.localeCompare(y.k)), at:Date.now()};
+    wxAt = Date.now();
+  } finally { wxBusy = false; }
+  return wx;
+}
+
+const wxRainSoon = () => wx ? wx.fcst.find(f => f.PTY && f.PTY !== '0') : null;
+
+function renderWxBadge(){
+  const el = document.getElementById('wxNow');
+  if (!document.getElementById('wxOn').checked || !wx){ el.textContent = ''; return; }
+  const n = wx.now, sky = wx.fcst[0]?.SKY;
+  const rainNow = PTY[n.PTY] || '';
+  const soon = wxRainSoon();
+  el.innerHTML =
+    `🌦 ${esc(wx.ref.name || '')} ${n.T1H ?? '-'}℃`
+    + (sky ? ` ${esc(SKY[sky] || '')}` : '')
+    + (rainNow ? ` <b style="color:#4da3ff">${esc(rainNow)} ${esc(n.RN1 || '')}mm</b>`
+               : soon ? ` <b style="color:#ffb454">${soon.t.slice(0,2)}시 ${esc(PTY[soon.PTY])}</b>`
+                      : ' 강수없음');
+}
+function wxBlockHTML(){
+  if (!document.getElementById('wxOn').checked) return '';
+  if (!kmaKey()) return `<div class="evt none">🌦 날씨를 보려면 상단 🔑 로 기상청 인증키를 넣어주세요.</div>`;
+  if (!wx) return `<div class="evt none">🌦 날씨 불러오는 중…</div>`;
+  const n = wx.now;
+  const rows = wx.fcst.slice(0, 6).map(f => {
+    const p = PTY[f.PTY] || '';
+    return `<span style="display:inline-block;min-width:62px">${f.t.slice(0,2)}시 `
+         + `${p ? `<b style="color:#4da3ff">${esc(p)}</b>` : esc(SKY[f.SKY] || '-')}`
+         + `${f.T1H ? ` ${esc(f.T1H)}°` : ''}</span>`;
+  }).join('');
+  const soon = wxRainSoon();
+  return `<div class="evt" style="cursor:default">
+    <div class="top"><span class="kind" style="background:#4da3ff">날씨</span>
+      <b>${esc(wx.ref.name || '기준 지점')}</b>
+      <time>${new Date(wx.at).toLocaleTimeString('ko-KR',{hour12:false,hour:'2-digit',minute:'2-digit'})} 기준</time></div>
+    <p>${n.T1H ?? '-'}℃ · 습도 ${n.REH ?? '-'}% · 바람 ${n.WSD ?? '-'}m/s
+       ${PTY[n.PTY] ? ` · <b style="color:#4da3ff">${esc(PTY[n.PTY])} ${esc(n.RN1||'')}mm</b>` : ' · 강수없음'}</p>
+    <p style="margin-top:5px">${rows}</p>
+    ${soon ? `<div class="go" style="color:#ffb454">⚠ ${soon.t.slice(0,2)}시 ${esc(PTY[soon.PTY])} 예보 —
+      비가 오면 AI 검지율이 떨어지고 침수 지점을 함께 살펴야 합니다</div>` : ''}
+  </div>`;
+}
+
+async function applyWx(){
+  const on = document.getElementById('wxOn').checked;
+  if (!on){ document.getElementById('wxNow').textContent = ''; if (tab === 'live') renderLive(); return; }
+  if (!kmaKey()){ askKmaKey(); if (!kmaKey()){ document.getElementById('wxOn').checked = false; return; } }
+  try{
+    await loadWx(true);
+    renderWxBadge();
+    if (tab === 'live') renderLive();
+  }catch(e){
+    document.getElementById('wxNow').textContent = '';
+    alert(e.message === 'NOKEY' ? '인증키가 없습니다.' : '날씨를 불러오지 못했습니다: ' + e.message);
+    document.getElementById('wxOn').checked = false;
+  }
+}
+function askKmaKey(){
+  const cur = kmaKey();
+  const v = prompt(
+    '기상청 단기예보 인증키(일반 인증키, Encoding)를 넣어주세요.\n\n'
+  + '이 브라우저에만 저장되며 GitHub 저장소에는 올라가지 않습니다.\n'
+  + '지우려면 내용을 비우고 확인을 누르세요.', cur);
+  if (v === null) return;
+  try{
+    if (v.trim()) localStorage.setItem(KMA_KEY_LS, v.trim());
+    else localStorage.removeItem(KMA_KEY_LS);
+  }catch(e){ alert('이 브라우저에서는 키를 저장할 수 없습니다.'); }
+}
+
 /* ---------------- UI ---------------- */
 /* CSS 의 모바일 분기와 조건이 같아야 한다. 가로로 누운 휴대폰도 모바일로 친다 */
 const isMobile = () => matchMedia('(max-width:820px), (max-height:480px) and (pointer:coarse)').matches;
@@ -2945,6 +3103,11 @@ document.getElementById('map').addEventListener('click', e => {
   renderList();
 });
 document.getElementById('routeBuf').addEventListener('change', () => { drawRoute(); });
+document.getElementById('wxOn').addEventListener('change', () => { applyWx(); save(); });
+document.getElementById('wxKey').addEventListener('click', () => {
+  askKmaKey();
+  if (kmaKey() && document.getElementById('wxOn').checked) applyWx();
+});
 document.getElementById('notifyOn').addEventListener('change', async e => {
   const ok = await enableNotify(e.target.checked);
   if (!ok) e.target.checked = false;
