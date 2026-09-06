@@ -541,7 +541,7 @@
     <p><b>스마트교차로</b> 탭의 <b>＋N방향</b> 은 한 교차로의 모든 진입로를 한 번에 띄웁니다.</p>
     <p><b>🚨 돌발 자동추적</b> 을 켜면 사고·공사·정체 지점의 CCTV가 저절로 올라옵니다.</p>
     <p class="only-d">띄운 화면은 <b>끌어서</b> 자리를 옮기고, <b>더블클릭</b>(또는 ⛶)으로 크게 볼 수 있습니다. 크게 본 상태에서 <b>마우스 휠</b>을 올리면 화면 안이 확대되고, 끌어서 이동합니다. 작게는 Esc.</p>
-    <p class="only-m">띄운 화면은 <b>길게 눌러 끌어서</b> 자리를 옮기고, <b>두 번 톡톡</b>(또는 ⛶) 하면 크게 볼 수 있습니다.</p>
+    <p class="only-m">띄운 화면은 <b>제목줄을 끌어서</b> 자리를 옮기고, <b>두 번 톡톡</b>(또는 ⛶) 하면 크게 볼 수 있습니다. 영상은 <b>두 손가락</b>으로 확대됩니다.</p>
     <p class="only-m">화면 <b>왼쪽 가장자리에서 오른쪽으로 밀면</b> 목록이 열리고, 목록을 왼쪽으로 밀면 닫힙니다.</p>
     <p><small class="only-d">동시 재생 수가 많을수록 CPU·네트워크 사용량이 커집니다. 9~16개 이하를 권장합니다.</small>
        <small class="only-m">동시 재생 수가 많을수록 배터리·데이터 사용량이 커집니다. 휴대폰에서는 4개 이하를 권장합니다.</small></p>
@@ -551,9 +551,9 @@
 <div id="sideVeil"></div>
 <div id="zoomVeil"></div>
 
-<div class="modal" id="statsWrap">
+<div class="modal" id="statsWrap" role="dialog" aria-modal="true" aria-labelledby="statsTitle">
   <div class="modalBar">
-    <b>📊 관측 통계</b>
+    <b id="statsTitle">📊 관측 통계</b>
     <span style="color:var(--dim);font-size:12px" id="statsMeta"></span>
     <div class="spacer"></div>
     <button class="btn" id="csvBtn">⬇ CSV 내보내기</button>
@@ -623,7 +623,7 @@ const distM = (aLat,aLon,bLat,bLon) => Math.hypot((aLat-bLat)*111000, (aLon-bLon
 function save(){
   try{
     localStorage.setItem(LSKEY, JSON.stringify({
-      selected: rotateOn ? rotateBackup : selected,
+      selected: userSelection(),
       tab,
       cols: document.getElementById('cols').value,
       fit : document.getElementById('fit').checked,
@@ -669,7 +669,7 @@ function restore(){
   if (s.mOn)  document.getElementById('motionOn').checked = true;
   if (s.auto) document.getElementById('autoTrack').checked = true;
   if (s.notify) document.getElementById('notifyOn').checked = true;
-  if (s.wx) document.getElementById('wxOn').checked = true;
+  if (s.wx && kmaKey()) document.getElementById('wxOn').checked = true;   // 키 없는 브라우저에서 매분 실패하지 않도록
   // 이미 허용해 둔 경우엔 다시 묻지 않고 바로 켠다
   if (s.notify && 'Notification' in window && Notification.permission === 'granted') notifyReady = true;
   if (s.tab === 'smart' || s.tab === 'live' || s.tab === 'flood') tab = s.tab;
@@ -802,7 +802,7 @@ function renderList(){
     const list = groupHit ? s.cameras : s.cameras.filter(c => matches(c, q, gu));
     if (!list.length) return;
     shown += list.length;
-    html += `<div class="grp" data-ixr="${s.ixrId}">
+    html += `<div class="grp" data-ixr="${esc(s.ixrId)}">
         <div><b>${esc(s.ixrNm)}</b> <em>${esc(s.areaCodeNm||'')}</em></div>
         <button class="btn" data-add="${s.ixrId}">＋${s.cameras.length}방향</button>
       </div>` + list.map(c => rowHTML(c, true)).join('');
@@ -816,7 +816,7 @@ function camLabel(c){ return c.kind === 'smart' ? (c.spot || c.dir || c.name) : 
 function tileName(c){ return c.kind === 'smart' ? `${c.name} · ${camLabel(c)}` : c.name; }
 
 function rowHTML(c, sub){
-  return `<label class="cam${sub?' sub':''} ${selected.includes(c.key)?'on':''}" data-key="${c.key}">
+  return `<label class="cam${sub?' sub':''} ${selected.includes(c.key)?'on':''}" data-key="${esc(c.key)}">
       <input type="checkbox" ${selected.includes(c.key)?'checked':''}>
       <div><b>${badge(c)}${esc(camLabel(c))}</b><span>${esc(c.sub)}</span></div>
     </label>`;
@@ -826,17 +826,18 @@ function rowHTML(c, sub){
 let live = {inc:[], con:[], flood:[], floodAll:[], at:0};
 
 async function loadLive(){
-  const [inc, con, flood] = await Promise.all([
-    fetch(`${BASE}/incs/map`).then(r=>r.json()).catch(()=>[]),
-    fetch(`${BASE}/sxn-trfs/congestions`).then(r=>r.json()).catch(()=>[]),
-    fetch(`${BASE}/floods`).then(r=>r.json()).catch(()=>[])
-  ]);
+  // 실패한 피드는 null 로 받아 '없음'과 구분한다. 서버 장애를 "돌발 0건"으로 보이게 하면 안 된다.
+  const get = path => fetch(`${BASE}${path}`).then(r => r.ok ? r.json() : null).catch(() => null);
+  const [inc, con, flood] = await Promise.all([get('/incs/map'), get('/sxn-trfs/congestions'), get('/floods')]);
+  const failed = [inc, con, flood].filter(x => x === null).length;
   live = {
-    inc  : (inc||[]).filter(i => i.lat && i.lot),
-    con  : (con||[]),
-    flood: (flood||[]).filter(f => f.floodingYn === 'Y'),   // 지금 침수 중인 곳
-    floodAll: (flood||[]),                                  // 침수 여부와 무관한 감시 지점 전체
-    at   : Date.now()
+    // 실패한 피드는 직전 값을 유지한다 (없던 정보가 갑자기 사라진 것처럼 보이지 않도록)
+    inc  : inc   ? inc.filter(i => Number.isFinite(+i.lat) && Number.isFinite(+i.lot)) : (live.inc || []),
+    con  : con   ? con : (live.con || []),
+    flood: flood ? flood.filter(f => f.floodingYn === 'Y') : (live.flood || []),
+    floodAll: flood ? flood : (live.floodAll || []),
+    at   : failed < 3 ? Date.now() : (live.at || 0),
+    failed
   };
   const n = live.inc.length + live.con.length + live.flood.length;
   const dot = document.getElementById('liveDot');
@@ -855,11 +856,14 @@ async function loadLive(){
 }
 
 const liveSummary = () =>
+  (live.failed ? `⚠ 피드 ${live.failed}개 불러오기 실패 — 아래는 직전 값 · ` : '') +
   `돌발 ${live.inc.length}건 · 정체 ${live.con.length}구간 · 침수 ${live.flood.length}곳` +
-  (live.at ? ` · ${new Date(live.at).toLocaleTimeString('ko-KR',{hour12:false})} 기준` : '');
+  (live.at ? ` · ${new Date(live.at).toLocaleTimeString('ko-KR',{hour12:false})} 기준` : ' · 아직 수신 못함');
 
 // 좌표에서 가장 가까운 카메라
 function nearestCams(lat, lon, n = 1){
+  // 좌표가 비거나 NaN 이면 거리 정렬이 무의미해져 엉뚱한 카메라가 뜬다 — 빈 결과를 돌려준다
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return [];
   return cams.filter(c => c.lat && c.lon)
     .map(c => ({c, d: distM(lat, lon, c.lat, c.lon)}))
     .sort((a,b) => a.d - b.d).slice(0, n);
@@ -897,7 +901,7 @@ function renderLive(){
   live.con.forEach(s => {
     const t = sectionCams(s);
     rows.push({
-      kind:`${s.trfGradeNm||'정체'} ${Number(s.spd).toFixed(0)}km/h`, cls:'jam',
+      kind:`${s.trfGradeNm||'정체'}${Number.isFinite(+s.spd) ? ` ${Number(s.spd).toFixed(0)}km/h` : ''}`, cls:'jam',
       title:s.sxnNm, body:`${s.bgngSxnNm||''} → ${s.endSxnNm||''}`, time:'',
       targets:t, dist:null
     });
@@ -1034,6 +1038,8 @@ function toggle(key, on, quiet){
   const i = selected.indexOf(key);
   if (on && i < 0) selected.push(key);
   if (!on && i >= 0) selected.splice(i, 1);
+  // 자동추적으로 올라온 타일을 사용자가 닫으면 추적 대상에서도 빼야 1분 뒤 다시 올라오지 않는다
+  if (!on){ autoKeys.delete(key); alerts.delete(key); }
 
   const row = document.querySelector(`.cam[data-key="${CSS.escape(key)}"]`);
   if (row){
@@ -1362,6 +1368,9 @@ function createTile(key){
   players.set(key, p);
   attachPinch(p);
 
+  // 아이콘만 있는 버튼은 스크린리더가 이모지 이름을 읽는다 — title 을 접근성 이름으로도 준다
+  tile.querySelectorAll('.tools button').forEach(b => b.setAttribute('aria-label', b.title));
+
   const cap = tile.querySelector('.cap');
   cap.style.touchAction = 'none';                 // 끌 때 화면이 같이 스크롤되지 않도록
   cap.addEventListener('pointerdown', e => onDragDown(e, p));
@@ -1408,10 +1417,11 @@ function createTile(key){
   start(p);
 }
 
-function start(p){
-  stop(p);
+// opts.keepRec: 재연결 중 녹화를 끊지 않음 / opts.stat: 첫 상태문구 (재연결 n/5 등)
+function start(p, opts = {}){
+  stop(p, opts.keepRec);
   p.tile.classList.remove('err');
-  setStat(p, '연결 중…');
+  setStat(p, opts.stat || '연결 중…');
 
   if (window.Hls && Hls.isSupported()){
     const hls = new Hls({
@@ -1436,8 +1446,10 @@ function start(p){
     });
   } else if (p.video.canPlayType('application/vnd.apple.mpegurl')){
     p.video.src = p.cam.url;
-    p.video.addEventListener('playing', () => setStat(p, ''), {once:true});
-    p.video.addEventListener('error',   () => fail(p),        {once:true});
+    // once 리스너라도 src 교체로는 안 소모되어 재시도마다 쌓인다 — 참조를 보관해 stop() 에서 떼어낸다
+    p.nativeOn = { playing: () => setStat(p, ''), error: () => fail(p) };
+    p.video.addEventListener('playing', p.nativeOn.playing, {once:true});
+    p.video.addEventListener('error',   p.nativeOn.error,   {once:true});
     p.video.play().catch(()=>{});
   } else {
     setStat(p, '이 브라우저는 HLS를 지원하지 않습니다');
@@ -1446,6 +1458,8 @@ function start(p){
   }
 
   p.watchdog = setInterval(() => {
+    // 탭이 뒤로 가거나 영상이 일시정지된 상태는 '멈춤'이 아니다 — 모바일에서 백그라운드 뒤 전부 죽는 원인
+    if (document.hidden || p.video.paused){ p.stall = 0; p.lastTime = p.video.currentTime; return; }
     const t = p.video.currentTime;
     if (t === p.lastTime){ if (++p.stall >= 4){ p.stall = 0; retry(p); } }
     else p.stall = 0;
@@ -1455,8 +1469,8 @@ function start(p){
 
 function retry(p){
   if (++p.retry > 5){ fail(p); return; }
-  setStat(p, `신호 없음 — 재연결 ${p.retry}/5`);
-  start(p);
+  // 재연결 중에는 녹화를 끊지 않는다. 트랙이 살아 있으면 이어지고, 끊기면 녹화기가 스스로 저장한다.
+  start(p, {keepRec:true, stat:`신호 없음 — 재연결 ${p.retry}/5`});
 }
 function fail(p){
   stop(p);
@@ -1468,9 +1482,14 @@ function setStat(p, msg){
   el.textContent = msg;
   el.style.display = msg ? '' : 'none';
 }
-function stop(p){
-  stopRec(p);                       // 소스를 끊기 전에 녹화를 마무리해 파일을 남긴다
+function stop(p, keepRec){
+  if (!keepRec) stopRec(p);         // 소스를 끊기 전에 녹화를 마무리해 파일을 남긴다 (재연결은 예외)
   if (p.watchdog){ clearInterval(p.watchdog); p.watchdog = null; }
+  if (p.nativeOn){
+    p.video.removeEventListener('playing', p.nativeOn.playing);
+    p.video.removeEventListener('error',   p.nativeOn.error);
+    p.nativeOn = null;
+  }
   if (p.hls){ try{ p.hls.destroy(); }catch(e){} p.hls = null; }
   try{ p.video.removeAttribute('src'); p.video.load(); }catch(e){}
   p.lastTime = -1; p.stall = 0; p.mPrev = null;
@@ -1612,6 +1631,7 @@ let screenRec = null;
 function toggleScreenRec(){
   const btn = document.getElementById('recScreen');
   if (screenRec){ if (screenRec.state !== 'inactive') screenRec.stop(); return; }
+  if (warnIfUnsupported('화면녹화')) return;   // iOS 는 캔버스가 오염되어 검은 영상만 남는다
 
   const mime = pickMime();
   if (mime === null){ alert('이 브라우저는 녹화를 지원하지 않습니다.'); return; }
@@ -1693,13 +1713,25 @@ let rotateOn = false, rotateTimer = null, rotatePool = [], rotatePage = 0, rotat
 function pageSize(){ return Math.max(1, (Number(document.getElementById('cols').value) || 3) * 2); }
 
 function startRotate(){
-  rotatePool = visibleCams().map(c => c.key);
-  if (rotatePool.length <= pageSize()){
-    alert(`순회할 카메라가 부족합니다.\n왼쪽 목록의 필터를 넓혀서 ${pageSize()+1}개 이상 보이게 해주세요.`);
+  if (scanning){
+    alert('전역 스캔이 끝난 뒤에 순회를 시작하세요.');
     document.getElementById('rotateOn').checked = false;
     return;
   }
-  rotateBackup = [...selected];
+  if (tab !== 'normal' && tab !== 'smart'){
+    alert('순회는 일반 CCTV 또는 스마트교차로 탭의 목록을 돌려봅니다.\n그 탭으로 옮긴 뒤 시작해주세요.');
+    document.getElementById('rotateOn').checked = false;
+    return;
+  }
+  rotatePool = visibleCams().map(c => c.key);
+  if (rotatePool.length <= pageSize()){
+    alert(`순회할 카메라가 부족합니다.\n목록의 검색·구군 필터를 넓혀서 ${pageSize()+1}개 이상 보이게 해주세요.`);
+    document.getElementById('rotateOn').checked = false;
+    if (rotateOn) stopRotate();          // 간격 변경으로 재시작하다 실패한 경우, 돌던 순회를 정리한다
+    return;
+  }
+  // 이미 순회 중이면(간격 변경 등) 현재 selected 는 순회 페이지이므로 백업을 덮어쓰지 않는다
+  if (!rotateOn) rotateBackup = [...selected];
   rotateOn = true; rotatePage = 0;
   showRotatePage();
   clearInterval(rotateTimer);
@@ -1754,7 +1786,7 @@ function openMap(){
 
     cams.filter(c => c.lat && c.lon).forEach(c => {
       const m = L.circleMarker([c.lat, c.lon], markerStyle(c))
-        .bindTooltip(tileName(c), {direction:'top'})
+        .bindTooltip(esc(tileName(c)), {direction:'top'})
         .on('click', () => { toggle(c.key, !selected.includes(c.key)); renderList(); });
       m._cam = c;
       markers.set(c.key, m);
@@ -1775,6 +1807,8 @@ function markerStyle(c){
 }
 function refreshMapStyles(){
   if (!map) return;
+  // 지도가 닫혀 있으면 659개 마커를 다시 칠할 이유가 없다 — 열 때 openMap 이 한 번 호출한다
+  if (!document.getElementById('mapWrap').classList.contains('on')) return;
   markers.forEach((m, k) => m.setStyle(markerStyle(m._cam)));
   document.getElementById('mapCount').textContent = `선택 ${selected.length}개`;
 }
@@ -1783,7 +1817,7 @@ function refreshMapIncidents(){
   incLayer.clearLayers();
   live.inc.forEach(i => {
     L.circleMarker([+i.lat, +i.lot], {radius:9, color:'#fff', weight:2, fillColor:'#ff4d4f', fillOpacity:.95})
-      .bindTooltip(`[${i.incTypeNm}] ${i.incSpotNm}`, {direction:'top'})
+      .bindTooltip(esc(`[${i.incTypeNm || '돌발'}] ${i.incSpotNm || ''}`), {direction:'top'})
       .on('click', () => {
         const n = nearestCams(+i.lat, +i.lot, 1)[0];
         if (n){ toggle(n.c.key, true); renderList(); }
@@ -1793,7 +1827,7 @@ function refreshMapIncidents(){
   live.flood.forEach(f => {
     if (!f.lat || !f.lot) return;
     L.circleMarker([+f.lat, +f.lot], {radius:9, color:'#fff', weight:2, fillColor:'#3aa0e8', fillOpacity:.95})
-      .bindTooltip(`[침수] ${f.intNm || ''}`, {direction:'top'})
+      .bindTooltip(esc(`[침수] ${f.intNm || ''}`), {direction:'top'})
       .on('click', () => {
         const c = nearestCams(+f.lat, +f.lot, 1)[0];
         if (c){ alerts.set(c.c.key, `침수 감지 · ${f.intNm || ''}`.trim()); toggle(c.c.key, true); applyAlerts(); renderList(); }
@@ -1823,9 +1857,16 @@ const COLOR = {car:'#7fe08a', bus:'#ffd964', truck:'#ff9f6b', motorcycle:'#ffa8f
 
 let aiOn = false, aiModel = null, aiModelName = '', aiLoading = false, aiPumping = false;
 
+let modelLoading = null;     // 동시 호출이 스크립트를 두 번 삽입하지 않도록 로딩 약속을 공유한다
 async function ensureModel(){
   const want = document.getElementById('aiModel').value;
   if (aiModel && aiModelName === want) return aiModel;
+  if (modelLoading) return modelLoading;
+  modelLoading = loadModelOnce(want).finally(() => { modelLoading = null; });
+  return modelLoading;
+}
+async function loadModelOnce(want){
+  if (aiModel && aiModel !== null){ try{ aiModel.dispose?.(); }catch(e){} aiModel = null; }   // 이전 모델 GPU 메모리 반납
   aiLoading = true; setAiStat('AI 모델 준비 중… (최초 1회, 13MB)');
   try{
     if (!window.tf){
@@ -1946,6 +1987,9 @@ function endDraw(){
 function onDrawClick(p, e){
   const cv = p.tile.querySelector('.det'), r = cv.getBoundingClientRect();
   const v = p.video;
+  if (!v.videoWidth){ alert('영상이 나온 뒤에 선을 그어주세요.'); return; }
+  // 아직 검지가 한 번도 안 돌았으면 캔버스 크기가 0 이라 좌표가 NaN 이 된다 — 먼저 맞춘다
+  if (!cv.width || !cv.height){ cv.width = Math.round(r.width); cv.height = Math.round(r.height); }
   const s  = Math.min(cv.width / v.videoWidth, cv.height / v.videoHeight);
   const ox = (cv.width - v.videoWidth*s) / 2, oy = (cv.height - v.videoHeight*s) / 2;
   // 캔버스 픽셀 → 영상 좌표 → 0~1 정규화 (창 크기·확대와 무관하게 유지)
@@ -1986,6 +2030,9 @@ async function recordFlows(){
     p.flow.lastAB = p.flow.ab; p.flow.lastBA = p.flow.ba; p.flow.lastAt = now;
   });
   if (recs.length) await obsPut(recs).catch(()=>{});
+  // 검지선만 쓰는 사용자도 14일 보관 규칙이 지켜지도록 하루 한 번 정리한다 (전에는 스캔 끝날 때만)
+  const today = new Date().toDateString();
+  if (recordFlows.lastPrune !== today){ recordFlows.lastPrune = today; obsPrune().catch(()=>{}); }
 }
 
 // 한 타일 검지 → 상자 그리기 → 집계 반환
@@ -2083,7 +2130,7 @@ async function aiPump(){
       // 추적은 프레임이 촘촘해야 하므로 검지선이 있는 타일을 최대 속도로 돌린다
       for (const p of lined){ if (!aiOn) break; await detectTile(p); }
       if (rest.length && aiOn) await detectTile(rest[restIdx++ % rest.length]);
-      await sleep(0);
+      await sleep(100);      // 검지선 타일은 최대 속도로 돌지만, 루프가 GPU 를 완전히 점유하진 않게 숨을 둔다
     } else {
       for (const p of rest){
         if (!aiOn) break;
@@ -2106,7 +2153,11 @@ async function applyAI(){
     return;
   }
   await ensureModel();
-  if (aiModel) aiPump();
+  if (aiModel){ aiPump(); return; }
+  // 모델을 못 불러왔으면 켜진 것처럼 남겨두지 않는다 (배지만 "🚗 0" 으로 뜨는 상태 방지)
+  aiOn = false;
+  document.getElementById('aiOn').checked = false;
+  document.body.classList.remove('ai');
 }
 
 /* ---------------- 관측 기록 (IndexedDB) ---------------- */
@@ -2193,9 +2244,14 @@ function scanPoolCams(){
   return cams.filter(c => v === 'all' || (v === 'normal' ? c.kind === 'normal' : c.kind === 'smart'));
 }
 async function startScan(){
-  if (!await ensureModel()){ alert('AI 모델을 불러오지 못해 스캔할 수 없습니다.'); return; }
+  if (scanning) return;
+  scanning = true;                      // 모델 로딩(수 초) 동안 두 번 눌러 루프가 둘 생기지 않도록 먼저 잠근다
+  document.getElementById('scanBtn').disabled = true;
+  const ok = await ensureModel();
+  document.getElementById('scanBtn').disabled = false;
+  if (!ok){ scanning = false; alert('AI 모델을 불러오지 못해 스캔할 수 없습니다.'); return; }
   const pool = scanPoolCams();
-  if (!pool.length) return;
+  if (!pool.length){ scanning = false; return; }
 
   if (rotateOn){ document.getElementById('rotateOn').checked = false; stopRotate(); }
   if (zoomKey) setZoom(players.get(zoomKey), false);
@@ -2303,7 +2359,9 @@ async function showStats(){
   const flows = recs.filter(r => r.kind === 'flow');
   const dens  = recs.filter(r => r.kind !== 'flow');
   const agg = statsAgg(dens);
-  const t0 = Math.min(...recs.map(r => r.ts)), t1 = Math.max(...recs.map(r => r.ts));
+  // 스프레드(...)는 기록이 수만 건이면 인자 한도를 넘어 예외가 난다 — 루프로 구한다
+  let t0 = Infinity, t1 = -Infinity;
+  for (const r of recs){ if (r.ts < t0) t0 = r.ts; if (r.ts > t1) t1 = r.ts; }
   const fmt = t => new Date(t).toLocaleString('ko-KR', {hour12:false});
   const st = await getStore();
   document.getElementById('statsMeta').textContent =
@@ -2410,7 +2468,7 @@ async function exportCSV(){
   const rows = recs.sort((a,b) => a.ts - b.ts).map(r => [
     r.kind === 'flow' ? '유량' : '밀도',
     r.key, `"${String(r.name).replace(/"/g,'""')}"`, r.lat, r.lon,
-    new Date(r.ts).toISOString(),
+    kstStamp(r.ts),                      // 화면과 같은 한국시각으로 (ISO 'Z' 는 엑셀에서 9시간 어긋나 보인다)
     r.car ?? '', r.bus ?? '', r.truck ?? '', r.motorcycle ?? '', r.person ?? '', r.kind === 'flow' ? '' : r.veh,
     r.kind === 'flow' ? r.ab : '', r.kind === 'flow' ? r.ba : '',
     r.kind === 'flow' ? r.mins : '', r.kind === 'flow' ? r.vph : ''
@@ -2422,7 +2480,7 @@ async function exportCSV(){
 /* ================= 공유 링크 =================
    지금 화면 구성을 주소에 담는다. 프리셋은 내 브라우저에만 있지만 이건 남에게 보낼 수 있다. */
 function buildShareURL(){
-  const keys = (rotateOn ? rotateBackup : selected).filter(k => byKey.has(k));
+  const keys = userSelection().filter(k => byKey.has(k));
   if (!keys.length) return null;
   const p = new URLSearchParams();
   p.set('s', keys.join(','));
@@ -2435,9 +2493,17 @@ function applyShareURL(){
   const p = new URLSearchParams(location.hash.slice(1));
   const s = p.get('s');
   if (!s) return null;
-  if (p.get('c')){ document.getElementById('cols').value = p.get('c'); applyCols(); }
+  const c = parseInt(p.get('c'), 10);
+  if (c >= 1 && c <= 6){ document.getElementById('cols').value = String(c); applyCols(); }   // 범위 밖 값은 무시
   if (p.get('f') === '1'){ document.getElementById('fit').checked = true; applyFit(); }
+  // 한 번 적용했으면 주소에서 지운다 — 남겨두면 이 탭을 새로고침할 때마다 내 저장값을 덮어쓴다
+  try{ history.replaceState(null, '', location.pathname + location.search); }catch(e){}
   return s.split(',').filter(Boolean);
+}
+// 저장·공유·프리셋에 쓰는 '사용자가 고른 화면'. 순회 페이지·스캔 배치·자동추적 타일은 제외한다.
+function userSelection(){
+  const base = scanning ? (scanBackup || []) : rotateOn ? rotateBackup : selected;
+  return base.filter(k => !autoKeys.has(k));
 }
 async function copyShareLink(){
   const url = buildShareURL();
@@ -2510,8 +2576,8 @@ function checkNotify(){
   live.inc.forEach(i => {
     const id = 'inc:' + i.incId;
     if (notified.has(id)) return;
+    if (!near(+i.lat, +i.lot)) return;   // 멀어서 안 알린 건은 기억하지 않는다 — 나중에 근처 카메라를 띄우면 알릴 수 있게
     notified.add(id);
-    if (!near(+i.lat, +i.lot)) return;
     const n = nearestCams(+i.lat, +i.lot, 1)[0];
     notify(`🚨 ${i.incTypeNm} · ${i.incSpotNm}`,
            decodeEnt(i.rcptCn || '').slice(0, 90) + (n ? `\n가까운 CCTV: ${tileName(n.c)}` : ''));
@@ -2557,6 +2623,9 @@ function routeSelect(){
   if (hit.length > 24 && !confirm(`경로 주변 ${hit.length}곳이 잡혔습니다. 모두 띄우면 매우 느려집니다. 계속할까요?`)) return;
   hit.forEach(c => toggle(c.key, true, true));
   commit(); renderList();
+  const extra = routeExtras(buf);
+  document.getElementById('mapCount').textContent =
+    `경로 주변 CCTV ${hit.length}곳 선택` + (extra ? ` · ${extra}` : '');
 }
 function setRouteMode(on){
   routeMode = on;
@@ -2576,8 +2645,16 @@ function clearRoute(){
 /* ================= 주차장 · 단속카메라 레이어 =================
    data.go.kr 표준데이터를 부산만 걸러 data/*.json 으로 넣어두면 키 없이 동작한다.
    위치·요금은 거의 바뀌지 않는 자료라 정적으로 두는 편이 빠르고 안정적이다. */
-let parkData = null, enfData = null;
+let parkData = null, enfData = null, dataMeta = null;
 let parkLayer = null, enfLayer = null;
+// 데이터가 언제 것인지 사용자가 알 수 있게 한다 (주차장은 수개월 전 자료일 수 있다)
+async function loadMeta(){
+  if (dataMeta !== null) return dataMeta;
+  try{ const r = await fetch('data/meta.json', {cache:'no-store'}); dataMeta = r.ok ? await r.json() : false; }
+  catch(e){ dataMeta = false; }
+  return dataMeta;
+}
+const asOfText = m => (m && m.date && m.date.asOf) ? ` · ${m.date.asOf} 기준 자료` : '';
 
 async function loadStatic(name){
   try{
@@ -2603,6 +2680,7 @@ const CAM_LABEL = c => (c.s > 0 ? `제한 ${c.s}km/h` : '단속카메라');
 async function toggleParkLayer(on){
   if (!on){ if (parkLayer){ map.removeLayer(parkLayer); parkLayer = null; } return; }
   if (!parkData){
+    await loadMeta();
     parkData = await loadStatic('parking');
     if (!parkData){ missingDataMsg('주차장'); document.getElementById('layerPark').checked = false; return; }
   }
@@ -2619,13 +2697,13 @@ function drawParkLayer(){
       radius:5, weight:1, color:'#0b1220',
       fillColor: p.free ? PARK_FREE : PARK_PAID, fillOpacity:.92
     })
-      .bindTooltip(`🅿️ ${p.n}${p.free ? ' (무료)' : ''}`, {direction:'top'})
+      .bindTooltip(esc(`🅿️ ${p.n}${p.free ? ' (무료)' : ''}`), {direction:'top'})
       .bindPopup(parkPopup(p))
       .addTo(parkLayer);
   });
   parkLayer.addTo(map);
   document.getElementById('mapCount').textContent =
-    `주차장 ${rows.length}곳${freeOnly ? ' (무료만)' : ''} · 선택 ${selected.length}개`;
+    `주차장 ${rows.length}곳${freeOnly ? ' (무료만)' : ''}${asOfText(dataMeta && dataMeta.parking)} · 선택 ${selected.length}개`;
 }
 function parkPopup(p){
   const near = nearestCams(p.lat, p.lon, 1)[0];
@@ -2643,6 +2721,7 @@ function parkPopup(p){
 async function toggleCamLayer(on){
   if (!on){ if (enfLayer){ map.removeLayer(enfLayer); enfLayer = null; } return; }
   if (!enfData){
+    await loadMeta();
     enfData = await loadStatic('cameras');
     if (!enfData){ missingDataMsg('단속카메라'); document.getElementById('layerCam').checked = false; return; }
   }
@@ -2656,7 +2735,9 @@ async function toggleCamLayer(on){
       .addTo(enfLayer);
   });
   enfLayer.addTo(map);
-  document.getElementById('mapCount').textContent = `단속카메라 ${enfData.length}개 · 선택 ${selected.length}개`;
+  const md = dataMeta && dataMeta.cameras;
+  document.getElementById('mapCount').textContent =
+    `단속카메라 ${enfData.length}개${md && md.districts ? ` (${md.districts.length}개 구·군만)` : ''}${asOfText(md)} · 선택 ${selected.length}개`;
 }
 function camPopup(c){
   const near = nearestCams(c.lat, c.lon, 1)[0];
@@ -2735,7 +2816,7 @@ async function kmaCall(op, params){
   const j = await r.json();
   const h = j?.response?.header;
   if (h?.resultCode !== '00') throw new Error(h?.resultMsg || '응답 오류');
-  return j.response.body.items.item || [];
+  return j?.response?.body?.items?.item ?? [];   // 발표 직후엔 body 가 비어 오기도 한다
 }
 
 async function loadWx(force){
@@ -2943,7 +3024,11 @@ document.getElementById('list').addEventListener('click', e => {
   }
 });
 
-document.getElementById('q').addEventListener('input', renderList);
+// 1,000행을 매 키 입력마다 다시 그리지 않도록 잠깐 모아서 처리한다
+let qTimer = null;
+document.getElementById('q').addEventListener('input', () => {
+  clearTimeout(qTimer); qTimer = setTimeout(renderList, 120);
+});
 document.getElementById('gu').addEventListener('change', renderList);
 document.getElementById('floodQ').addEventListener('input', renderFlood);
 document.getElementById('floodOnlyWet').addEventListener('change', renderFlood);
@@ -2965,8 +3050,12 @@ document.getElementById('recScreen').addEventListener('click', toggleScreenRec);
 document.getElementById('reloadAll').addEventListener('click', () => players.forEach(p => start(p)));
 document.getElementById('toggleSide').addEventListener('click', () => setSide());
 document.getElementById('fsAll').addEventListener('click', () => {
+  if (!document.documentElement.requestFullscreen){
+    alert('이 브라우저(iPhone 사파리 등)는 전체화면을 지원하지 않습니다.\n홈 화면에 추가해서 열면 전체화면으로 뜹니다.');
+    return;
+  }
   if (document.fullscreenElement) document.exitFullscreen();
-  else document.documentElement.requestFullscreen();
+  else document.documentElement.requestFullscreen().catch(()=>{});
 });
 
 document.getElementById('autoTrack').addEventListener('change', e => {
@@ -2989,7 +3078,7 @@ document.getElementById('rotateSec').addEventListener('change', () => {
 });
 
 document.getElementById('presetSave').addEventListener('click', () => {
-  const keys = rotateOn ? rotateBackup : selected;
+  const keys = userSelection();
   if (!keys.length){ alert('저장할 화면이 없습니다. 먼저 CCTV를 선택하세요.'); return; }
   const name = prompt('프리셋 이름을 입력하세요 (예: 출근길, 광안리)');
   if (!name) return;
@@ -3061,7 +3150,9 @@ document.getElementById('aiOn').addEventListener('change', e => {
   applyAI(); save();
 });
 document.getElementById('aiModel').addEventListener('change', async () => {
-  aiModel = null; if (document.getElementById('aiOn').checked) await applyAI();
+  try{ aiModel?.dispose?.(); }catch(e){}
+  aiModel = null; aiModelName = '';
+  if (document.getElementById('aiOn').checked) await applyAI();
   save();
 });
 document.getElementById('aiGap').addEventListener('change', save);
@@ -3104,6 +3195,21 @@ document.getElementById('map').addEventListener('click', e => {
 });
 document.getElementById('routeBuf').addEventListener('change', () => { drawRoute(); });
 document.getElementById('wxOn').addEventListener('change', () => { applyWx(); save(); });
+
+// 탭이 다시 보이면, 백그라운드 동안 멎은 화면을 되살린다
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  players.forEach(p => {
+    if (p.tile.classList.contains('err') || p.video.paused) { p.retry = 0; start(p, {keepRec:true}); }
+  });
+});
+
+// 재연결 상태문구가 '연결 중…' 으로 바로 덮이지 않도록 start() 가 opts.stat 을 받는다 (위 참조)
+// CSV 용 한국시각 문자열
+function kstStamp(ts){
+  const d = new Date(ts + 9*3600000), p = n => String(n).padStart(2,'0');
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth()+1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}`;
+}
 document.getElementById('wxKey').addEventListener('click', () => {
   askKmaKey();
   if (kmaKey() && document.getElementById('wxOn').checked) applyWx();
@@ -3121,7 +3227,9 @@ window.addEventListener('keydown', e => {
   if (e.key === '['){ e.preventDefault(); setSide(); }
   if (e.key === 'Escape'){
     const mapOn = document.getElementById('mapWrap').classList.contains('on');
+    const statsOn = document.getElementById('statsWrap').classList.contains('on');
     if (drawKey) endDraw();
+    else if (statsOn) document.getElementById('statsWrap').classList.remove('on');
     else if (mapOn) document.getElementById('mapWrap').classList.remove('on');
     else if (zoomKey) setZoom(players.get(zoomKey), false);
     else if (isMobile() && !sideHidden()){ setSide(true); save(); }
