@@ -703,29 +703,46 @@ async function loadSmart(){
     .sort((a,b) => (a.areaCodeNm||'').localeCompare(b.areaCodeNm||'','ko')
                 || (a.ixrNm||'').localeCompare(b.ixrNm||'','ko'));
 
-  let i = 0;
-  async function worker(){
-    while (i < list.length){
-      const s = list[i++];
-      try{
-        const raw = await (await fetch(`${BASE}/sints/${s.ixrId}/cameras`)).json();
-        s.cameras = raw.filter(c => c.hlsAddr).map(c => ({
-          key : 's:' + c.cmraId,
-          kind: 'smart',
-          name: s.ixrNm,
-          dir : dirOf(c),
-          spot: spotOf(c, s.ixrNm),
-          sub : addrOf(c.addr, s.areaCodeNm),
-          gu  : s.areaCodeNm || '',
-          lat : Number(c.cmraXCrdn) || Number(s.xcrdn),
-          lon : Number(c.cmraYCrdn) || Number(s.ycrdn),
-          url : c.hlsAddr,
-          ixr : s.ixrId
-        })).sort((a,b) => DIRORD.indexOf(a.dir) - DIRORD.indexOf(b.dir));
-      }catch(e){ s.cameras = []; }
-    }
+  async function fetchOne(s){
+    const raw = await (await fetch(`${BASE}/sints/${s.ixrId}/cameras`)).json();
+    s.cameras = raw.filter(c => c.hlsAddr).map(c => ({
+      key : 's:' + c.cmraId,
+      kind: 'smart',
+      name: s.ixrNm,
+      dir : dirOf(c),
+      spot: spotOf(c, s.ixrNm),
+      sub : addrOf(c.addr, s.areaCodeNm),
+      gu  : s.areaCodeNm || '',
+      lat : Number(c.cmraXCrdn) || Number(s.xcrdn),
+      lon : Number(c.cmraYCrdn) || Number(s.ycrdn),
+      url : c.hlsAddr,
+      ixr : s.ixrId
+    })).sort((a,b) => DIRORD.indexOf(a.dir) - DIRORD.indexOf(b.dir));
   }
-  await Promise.all(Array.from({length:8}, worker));
+
+  // 교차로 109곳을 한꺼번에 때리면 부산시 API 가 이따금 거부한다(이때 CORS 헤더까지 빠져 fetch 자체가 실패한다).
+  // 실패분만 한 번 더 좁게 받아보고, 그래도 못 받은 수를 loadSmart.failed 에 남긴다.
+  // 부르는 쪽은 이 값으로 '반쪽짜리 목록'을 가려낸다 — 그대로 캐시에 굳히면 안 되기 때문이다.
+  async function pass(todo, width){
+    const miss = [];
+    let i = 0;
+    await Promise.all(Array.from({length:width}, async () => {
+      while (i < todo.length){
+        const s = todo[i++];
+        try{ await fetchOne(s); }
+        catch(e){ s.cameras = []; miss.push(s); }
+      }
+    }));
+    return miss;
+  }
+
+  let miss = await pass(list, 8);
+  if (miss.length){
+    await new Promise(r => setTimeout(r, 800));     // 잠깐 쉬었다가 실패분만 좁게 다시
+    miss = await pass(miss, 3);
+  }
+  loadSmart.failed = miss.length;
+
   return list.filter(s => s.cameras.length);
 }
 
@@ -1420,6 +1437,7 @@ function createTile(key){
 // opts.keepRec: 재연결 중 녹화를 끊지 않음 / opts.stat: 첫 상태문구 (재연결 n/5 등)
 function start(p, opts = {}){
   stop(p, opts.keepRec);
+  p.hidPause = false;
   p.tile.classList.remove('err');
   setStat(p, opts.stat || '연결 중…');
 
@@ -3196,13 +3214,54 @@ document.getElementById('map').addEventListener('click', e => {
 document.getElementById('routeBuf').addEventListener('change', () => { drawRoute(); });
 document.getElementById('wxOn').addEventListener('change', () => { applyWx(); save(); });
 
-// 탭이 다시 보이면, 백그라운드 동안 멎은 화면을 되살린다
-document.addEventListener('visibilitychange', () => {
-  if (document.hidden) return;
+/* ---------------- 가려진 동안에는 스트림을 멈춘다 ---------------- */
+// 여러 화면을 띄워두고 다른 탭으로 넘어가도 HLS 세그먼트는 계속 내려받는다.
+// 배터리·데이터·부산시 서버 부하가 그대로 나가므로 보이지 않는 동안에는 멈춰 둔다.
+const RESUME_FAST_MS = 15000;   // 잠깐 다녀온 정도면 이어서 재생, 오래 비웠으면 다시 연결한다
+let hiddenAt = 0;
+
+// 모션 자동녹화를 켜 뒀다면 자리를 비운 채 감시하겠다는 뜻이므로 아무것도 멈추지 않는다.
+const unattended = () => document.getElementById('motionOn').checked &&
+                         document.getElementById('motionRec').checked;
+// 녹화 중·검지선이 걸린 화면은 결과가 끊기면 안 되고,
+// 작은 창(PiP)은 탭이 가려져도 사용자 눈에는 계속 보인다.
+const mustKeepRunning = p => p.rec || screenRec || !!lines[p.key] ||
+                             document.pictureInPictureElement === p.video;
+
+function pauseHidden(){
+  if (hiddenAt || unattended()) return;
+  hiddenAt = Date.now();
   players.forEach(p => {
-    if (p.tile.classList.contains('err') || p.video.paused) { p.retry = 0; start(p, {keepRec:true}); }
+    if (mustKeepRunning(p) || p.video.paused) return;
+    p.hidPause = true;                                  // 우리가 멈춘 것임을 표시해 둔다
+    if (p.hls){ try{ p.hls.stopLoad(); }catch(e){} }
+    try{ p.video.pause(); }catch(e){}
   });
-});
+}
+
+// 탭이 다시 보이면, 멈춰 둔 화면과 백그라운드 동안 저 혼자 멎은 화면을 함께 되살린다
+function resumeHidden(){
+  const away = hiddenAt ? Date.now() - hiddenAt : Infinity;
+  hiddenAt = 0;
+  players.forEach(p => {
+    const ours = p.hidPause;
+    p.hidPause = false;
+    if (ours && away <= RESUME_FAST_MS && p.hls){
+      try{
+        p.hls.startLoad();
+        // 멈춰 있는 사이에도 방송은 흘렀다. 끊긴 지점이 아니라 지금 시점부터 본다.
+        const live = p.hls.liveSyncPosition;
+        if (typeof live === 'number' && live > p.video.currentTime) p.video.currentTime = live;
+        p.video.play().catch(()=>{});
+        return;
+      }catch(e){}                                       // 이어붙이기가 안 되면 아래로 흘려 재연결한다
+    }
+    if (p.tile.classList.contains('err') || p.video.paused){ p.retry = 0; start(p, {keepRec:true}); }
+  });
+}
+
+document.addEventListener('visibilitychange', () =>
+  document.hidden ? pauseHidden() : resumeHidden());
 
 // 재연결 상태문구가 '연결 중…' 으로 바로 덮이지 않도록 start() 가 opts.stat 을 받는다 (위 참조)
 // CSV 용 한국시각 문자열
@@ -3243,7 +3302,106 @@ window.addEventListener('beforeunload', e => {
   if (screenRec || [...players.values()].some(p => p.rec)){ e.preventDefault(); e.returnValue = ''; }
 });
 
+/* ---------------- 카메라 목록 캐시 ---------------- */
+// 스마트교차로가 109곳이라 교차로마다 한 번씩, 열 때마다 모두 110번을 호출한다.
+// 카메라 설치 위치는 거의 바뀌지 않으므로 캐시로 즉시 띄우고, 오래된 캐시는 뒤에서 조용히 갱신한다.
+const CAMKEY   = 'busan-cctv-cams-v1';
+const CAM_SOFT = 6 * 3600 * 1000;        // 이보다 오래되면 화면을 띄운 뒤 백그라운드 갱신
+const CAM_HARD = 7 * 24 * 3600 * 1000;   // 이보다 오래되면 캐시를 믿지 않고 새로 받는다
+
+// sints 는 API 응답을 통째로 들고 있어 무겁다. 로드 이후 실제로 쓰는 네 가지만 남긴다.
+const trimSint = s => ({ixrId:s.ixrId, ixrNm:s.ixrNm, areaCodeNm:s.areaCodeNm, cameras:s.cameras});
+
+function readCamCache(){
+  try{
+    const o = JSON.parse(localStorage.getItem(CAMKEY) || 'null');
+    if (!o || !o.at || !Array.isArray(o.n) || !Array.isArray(o.s)) return null;
+    if (!o.n.length && !o.s.length) return null;
+    const age = Date.now() - o.at;
+    return age < CAM_HARD ? {n:o.n, s:o.s, age} : null;
+  }catch(e){ return null; }
+}
+function writeCamCache(n, s){
+  // 용량 초과나 시크릿 모드는 그냥 넘어간다 — 캐시가 없어도 동작은 한다
+  try{ localStorage.setItem(CAMKEY, JSON.stringify({at:Date.now(), n, s})); }catch(e){}
+}
+async function fetchCams(){
+  const [n, s] = await Promise.all([loadNormal(), loadSmart()]);
+  // 일부 교차로를 못 받았으면 화면에는 받은 만큼 보여주되 캐시에는 넣지 않는다
+  return {n, s: s.map(trimSint), partial: loadSmart.failed > 0};
+}
+function applyCams(n, s){
+  cams  = n.concat(...s.map(x => x.cameras));
+  sints = s;
+  byKey = new Map(cams.map(c => [c.key, c]));
+}
+function fillGu(){
+  const sel = document.getElementById('gu');
+  const keep = sel.value;
+  while (sel.options.length > 1) sel.remove(1);      // '전체 구·군' 만 남기고 다시 채운다
+  [...new Set(cams.map(c => c.gu).filter(Boolean))]
+    .sort((a,b) => a.localeCompare(b,'ko'))
+    .forEach(g => sel.insertAdjacentHTML('beforeend', `<option value="${esc(g)}">${esc(g)}</option>`));
+  sel.value = keep;
+}
+
+// 오래된 캐시로 화면을 띄운 뒤의 뒷정리. 실패해도 조용히 넘어간다 — 이미 캐시로 돌아가고 있다.
+async function revalidateCams(){
+  try{
+    const got = await fetchCams();
+    if (got.partial || !got.n.length) return;        // 반쪽짜리 응답으로 멀쩡한 캐시를 덮지 않는다
+    writeCamCache(got.n, got.s);
+    applyCams(got.n, got.s);
+    fillGu();
+    renderList();                                    // 보고 있는 화면은 건드리지 않는다
+  }catch(e){}
+}
+
+function showBootError(err, retry){
+  const el = document.getElementById('count');
+  el.innerHTML =
+    `<span style="color:var(--danger)">목록을 불러오지 못했습니다: ${esc((err && err.message) || err)}<br>
+     인터넷 연결 또는 its.busan.go.kr 상태를 확인하세요.</span><br>`;
+  const b = document.createElement('button');
+  b.className = 'btn';
+  b.textContent = '다시 시도';
+  b.style.marginTop = '8px';
+  b.addEventListener('click', () => { el.textContent = '불러오는 중…'; retry(); });
+  el.appendChild(b);
+}
+
 /* ---------------- 시작 ---------------- */
+let timersOn = false;
+
+async function boot(want){
+  const cached = readCamCache();
+
+  if (cached){
+    applyCams(cached.n, cached.s);
+  } else {
+    let got;
+    try{ got = await fetchCams(); }
+    catch(err){ showBootError(err, () => boot(want)); return; }   // 새로고침 없이 다시 시도할 수 있게
+    applyCams(got.n, got.s);
+    if (!got.partial) writeCamCache(got.n, got.s);
+  }
+
+  fillGu();
+  selected = want.filter(k => byKey.has(k));
+  renderList();
+  syncGrid();
+  applyMotion();
+
+  await loadLive();
+  if (!timersOn){
+    timersOn = true;
+    setInterval(loadLive, 60000);        // 실시간 상황 1분마다 갱신
+    setInterval(recordFlows, 300000);    // 검지선 통과량 5분마다 기록
+  }
+
+  if (cached && cached.age > CAM_SOFT) revalidateCams();
+}
+
 (async () => {
   const saved = restore();
   document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
@@ -3251,35 +3409,15 @@ window.addEventListener('beforeunload', e => {
   document.body.classList.add('ready');
   renderPresets();
 
-  try{
-    const [n, s] = await Promise.all([loadNormal(), loadSmart()]);
-    cams  = n.concat(...s.map(x => x.cameras));
-    sints = s;
-    byKey = new Map(cams.map(c => [c.key, c]));
-  }catch(err){
-    document.getElementById('count').innerHTML =
-      `<span style="color:var(--danger)">목록을 불러오지 못했습니다: ${esc(err.message)}<br>
-       인터넷 연결 또는 its.busan.go.kr 상태를 확인하세요.</span>`;
-    return;
-  }
-
-  const gus = [...new Set(cams.map(c => c.gu).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ko'));
-  const sel = document.getElementById('gu');
-  gus.forEach(g => sel.insertAdjacentHTML('beforeend', `<option value="${esc(g)}">${esc(g)}</option>`));
-
+  // 주소의 공유 파라미터는 한 번만 읽는다 (읽으면서 주소를 지우므로, 재시도 때 날아가지 않도록)
   const shared = applyShareURL();
-  selected = (shared || saved).filter(k => byKey.has(k));
-  renderList();
-  syncGrid();
-  applyMotion();
 
   // https 로 열렸을 때만 앱 설치/오프라인 껍데기를 등록한다
   if (location.protocol === 'https:' && 'serviceWorker' in navigator){
     navigator.serviceWorker.register('sw.js').catch(()=>{});
   }
-  await loadLive();
-  setInterval(loadLive, 60000);        // 실시간 상황 1분마다 갱신
-  setInterval(recordFlows, 300000);    // 검지선 통과량 5분마다 기록
+
+  await boot(shared || saved);
 })();
 </script>
 </body>
